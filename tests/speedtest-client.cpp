@@ -19,6 +19,10 @@ using namespace oxen::quic;
 
 namespace oxen::quic {
     extern int GSO_USED, GSO_NOT;
+extern int64_t DEBUG_acks;
+extern int64_t DEBUG_ack_data;
+extern int64_t total_packets_like_ever;
+extern int64_t total_stream_data;
 }
 
 int main(int argc, char* argv[])
@@ -198,6 +202,11 @@ int main(int argc, char* argv[])
         }
 
         log::critical(test_cat, "Hashes matched, hurray!");
+
+        log::warning(test_cat, "Stats: {} acks received for {}B; {} packets sent containing {}B",
+                DEBUG_acks, DEBUG_ack_data, total_packets_like_ever, total_stream_data);
+
+
         sd.failed = false;
         sd.done = true;
     };
@@ -327,7 +336,8 @@ int main(int argc, char* argv[])
         fmt::print("OMG failed!\n");
 
     auto elapsed = std::chrono::duration<double>{std::chrono::steady_clock::now() - started_at}.count();
-    fmt::print("GSO: {} used, {} not used\n", GSO_USED, GSO_NOT);
+    fmt::print("Stats: {} acks received for {}B; {} packets sent containing {}B; used GSO for {}/{}",
+            DEBUG_acks, DEBUG_ack_data, total_packets_like_ever, total_stream_data, GSO_USED, GSO_NOT+GSO_USED);
     fmt::print("Elapsed time: {:.3f}s\n", elapsed);
     fmt::print("Speed: {:.3f}MB/s\n", size / 1'000'000.0 / elapsed);
 

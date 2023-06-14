@@ -14,6 +14,14 @@
 
 using namespace oxen::quic;
 
+namespace oxen::quic {
+    extern int GSO_USED, GSO_NOT;
+extern int64_t DEBUG_acks;
+extern int64_t DEBUG_ack_data;
+extern int64_t total_packets_like_ever;
+extern int64_t total_stream_data;
+}
+
 int main(int argc, char* argv[])
 {
     CLI::App cli{"libQUIC test server"};
@@ -111,6 +119,9 @@ int main(int argc, char* argv[])
 
             log::warning(test_cat, "Data from stream {} complete ({} B).  Final hash: {}",
                     s.stream_id, info.received, oxenc::to_hex(final_hash.begin(), final_hash.end()));
+
+            fmt::print("Stats: {} acks received for {}B; {} packets sent containing {}B; used GSO for {}/{}",
+                    DEBUG_acks, DEBUG_ack_data, total_packets_like_ever, total_stream_data, GSO_USED, GSO_NOT+GSO_USED);
 
             s.send(std::move(final_hash));
         }

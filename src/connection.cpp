@@ -540,10 +540,12 @@ namespace oxen::quic
         /*
         log::warning(log_cat, "flush_streams stats: {} stream more, {} stream packets, {} \"-1\" more, {} \"-1\" packets",
                 debug_stream_mores, debug_stream_packets, debug_streamn1_mores, debug_streamn1_packets);
+                */
         total_packets_like_ever += debug_stream_packets;
         total_packets_like_ever += debug_stream_mores;
         total_packets_like_ever += debug_streamn1_packets;
         total_packets_like_ever += debug_streamn1_mores;
+        /*
         log::warning(log_cat, "omg: total packets like ever = {} ({}B), total acks ever = {} ({}B)",
                 total_packets_like_ever, total_stream_data, DEBUG_acks, DEBUG_ack_data);
                 */
