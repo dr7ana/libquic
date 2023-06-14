@@ -119,7 +119,7 @@ namespace oxen::quic
     using unblocked_callback_t = std::function<bool(Stream&)>;
 
     inline constexpr size_t DATAGRAM_BATCH_SIZE =
-#if !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
+#if !defined(OXEN_LIBQUIC_UDP_LIBUV_QUEUING) && !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
             8;
 #else
             1;

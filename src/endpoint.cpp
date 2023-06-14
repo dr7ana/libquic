@@ -332,14 +332,17 @@ namespace oxen::quic
 
         packet_data->refs++;  // Hold an extra reference to prevent destruction before we return
 
+        auto* bufpos = packet_data->data.data();
+
         for (int i = 0; i < n_pkts; ++i)
         {
             assert(bufsize[i] > 0);
 
             uv_buf_t uv_buf;
-            uv_buf.base = reinterpret_cast<char*>(buf);
+            uv_buf.base = bufpos;
             uv_buf.len = bufsize[i];
-            buf += bufsize[i];
+            bufpos += bufsize[i];
+
             packet_data->refs++;
 
 #ifndef NDEBUG
@@ -350,6 +353,7 @@ namespace oxen::quic
             send_req->data = packet_data;
 
             auto rv = uv_udp_send(send_req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
+
             if (rv != 0)  // This is a libuv error, *not* a udp send error, so we have to clean up
             {
                 release(packet_data);  // Delete our outer extra reference
