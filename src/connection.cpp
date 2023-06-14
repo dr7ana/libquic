@@ -565,7 +565,7 @@ namespace oxen::quic
         if (ts == 0)
             ts = get_timestamp();
 
-        auto delta = 0;
+        int64_t delta = 0;
         if (exp < ts)
         {
             log::info(log_cat, "Expiry delta: {}ns ago", ts - exp);
