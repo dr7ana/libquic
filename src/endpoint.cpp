@@ -185,17 +185,18 @@ namespace oxen::quic
         if (rv == NGTCP2_ERR_VERSION_NEGOTIATION)
         {  // version negotiation has not been sent yet, ignore packet
             send_version_negotiation(vid, pkt.path);
+            log::critical(log_cat, "Error: {}", ngtcp2_strerror(rv));
             return std::nullopt;
         }
         if (rv != 0)
         {
-            log::debug(log_cat, "Error: failed to decode QUIC packet header [code: {}]", ngtcp2_strerror(rv));
+            log::critical(log_cat, "Error: failed to decode QUIC packet header [code: {}]", ngtcp2_strerror(rv));
             return std::nullopt;
         }
 
         if (vid.dcidlen > NGTCP2_MAX_CIDLEN)
         {
-            log::debug(log_cat, "Error: destination ID is longer than NGTCP2_MAX_CIDLEN");
+            log::critical(log_cat, "Error: destination ID is longer than NGTCP2_MAX_CIDLEN ({} > {})", vid.dcidlen, NGTCP2_MAX_CIDLEN);
             return std::nullopt;
         }
 
