@@ -590,8 +590,7 @@ namespace oxen::quic
         delta /= 1'000'000;
 
         retransmit_timer->stop();
-        // FIXME
-        retransmit_timer->start(1ms, 0ms); //delta * 1ms, 0ms);
+        retransmit_timer->start(delta * 1ms, 0ms);
     }
 
     const std::shared_ptr<Stream>& Connection::get_stream(int64_t ID) const
