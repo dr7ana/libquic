@@ -56,7 +56,8 @@ namespace oxen::quic::test
         auto server = test_net.server_listen(server_local, server_tls, server_stream_open_cb, server_stream_data_cb);
 
         log::debug(log_cat, "Calling 'client_connect'...");
-        auto client = test_net.client_connect(client_local, client_remote, client_tls, client_stream_open_cb, client_stream_data_cb);
+        auto client = test_net.client_connect(
+                client_local, client_remote, client_tls, client_stream_open_cb, client_stream_data_cb);
 
         std::thread ev_thread{[&]() { test_net.run(); }};
 

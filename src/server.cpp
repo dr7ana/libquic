@@ -40,8 +40,7 @@ namespace oxen::quic
         auto ctx = reinterpret_cast<ServerContext*>(context.get());
 
         return conn->get_new_stream(
-            (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), 
-            std::move(close_cb));
+                (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), std::move(close_cb));
     }
 
     std::shared_ptr<uv_udp_t> Server::get_handle(Address& addr)
