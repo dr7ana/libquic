@@ -119,8 +119,9 @@ namespace oxen::quic
     using unblocked_callback_t = std::function<bool(Stream&)>;
 
     inline constexpr size_t DATAGRAM_BATCH_SIZE =
-#if !defined(OXEN_LIBQUIC_UDP_LIBUV_QUEUING) && !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
-            8;
+#if !defined(OXEN_LIBQUIC_UDP_LIBUV_QUEUING) && !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && \
+        (defined(__linux__) || defined(__FreeBSD__))
+            24;
 #else
             1;
 #endif
@@ -426,19 +427,60 @@ namespace oxen::quic
         ngtcp2_pkt_info pkt_info;
     };
 
+    struct libuv_error_code_t final
+    {};
+    struct ngtcp2_error_code_t final
+    {};
+
+    // Tag values to pass into the constructor to indicate a libuv or ngtcp2 error code.
+    //
+    // (On unixy systems, libuv error codes are the negatives of errno codes, but on Windows they
+    // are arbitrary values, so they have to be handled differently).
+    //
+    // (For ngtcp2, error codes are arbitrary negative values without any connection to errno).
+    static inline constexpr libuv_error_code_t libuv_error_code{};
+    static inline constexpr ngtcp2_error_code_t ngtcp2_error_code{};
+
     // Struct returned as a result of send_packet that either is implicitly
     // convertible to bool, but also is able to carry an error code
     struct io_result
     {
+
+        // Default construction makes a "good" io_result, i.e. with error code 0
+        io_result() : io_result{0} {}
+
+        // Constructs an io_result with an `errno` value.
+        explicit io_result(int errno_val) : error_code{errno_val} {}
+
+        // Constructs an io_result with a libuv error value.
+        io_result(int err, libuv_error_code_t) : error_code{err}, is_libuv{true} {}
+
+        // Constructs an io_result with an ngtcp2 error value.
+        io_result(int err, ngtcp2_error_code_t) : error_code{err}, is_libuv{true} {}
+
+        // Same as the libuv error code constructor
+        static io_result libuv(int err) { return io_result{err, libuv_error_code}; }
+
+        // Same as the ngtcp2 error code constructor
+        static io_result ngtcp2(int err) { return io_result{err, ngtcp2_error_code}; }
+
+        // The numeric error code
         int error_code{0};
+        // If true then `error_code` is a libuv/ngtcp2 error code, rather than an errno value.
+        bool is_libuv = false, is_ngtcp2 = false;
         // Returns true if this indicates success, i.e. error code of 0
         bool success() const { return error_code == 0; }
         // Returns true if this indicates failure, i.e. error code not 0
         bool failure() const { return !success(); }
         // returns true if error value indicates a failure to write without blocking
-        bool blocked() const { return error_code == EAGAIN || error_code == EWOULDBLOCK; }
-        // returns error code as string
-        std::string_view str() const { return strerror(error_code); }
+        bool blocked() const
+        {
+            return is_libuv  ? error_code == UV_EAGAIN
+                 : is_ngtcp2 ? error_code == NGTCP2_ERR_STREAM_DATA_BLOCKED
+                             : (error_code == EAGAIN || error_code == EWOULDBLOCK);
+        }
+        // returns the error message string describing error_code
+        std::string_view str() const;
     };
 
     // Shortcut for a const-preserving `reinterpret_cast`ing c.data() from a std::byte to a uint8_t

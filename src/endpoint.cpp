@@ -123,8 +123,7 @@ namespace oxen::quic
         }
 
         ngtcp2_ccerr err;
-        ngtcp2_ccerr_set_liberr(
-                &err, code, reinterpret_cast<uint8_t*>(const_cast<char*>(msg.data())), msg.size());
+        ngtcp2_ccerr_set_liberr(&err, code, reinterpret_cast<uint8_t*>(const_cast<char*>(msg.data())), msg.size());
 
         conn.conn_buffer.resize(max_pkt_size);
         Path path;
@@ -196,7 +195,11 @@ namespace oxen::quic
 
         if (vid.dcidlen > NGTCP2_MAX_CIDLEN)
         {
-            log::critical(log_cat, "Error: destination ID is longer than NGTCP2_MAX_CIDLEN ({} > {})", vid.dcidlen, NGTCP2_MAX_CIDLEN);
+            log::critical(
+                    log_cat,
+                    "Error: destination ID is longer than NGTCP2_MAX_CIDLEN ({} > {})",
+                    vid.dcidlen,
+                    NGTCP2_MAX_CIDLEN);
             return std::nullopt;
         }
 
@@ -232,7 +235,7 @@ namespace oxen::quic
         switch (rv)
         {
             case 0:
-                //log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
+                // log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
                 conn.io_ready();
                 break;
             case NGTCP2_ERR_DRAINING:
@@ -263,7 +266,7 @@ namespace oxen::quic
                 break;
         }
 
-        return {rv};
+        return io_result::ngtcp2(rv);
     }
 
     // We support different compilation modes for trying different methods of UDP sending by setting
@@ -287,175 +290,209 @@ namespace oxen::quic
     {
         struct packet_storage
         {
-            int refs = 0;
-            std::vector<char> data;
-            std::array<uv_udp_send_t, DATAGRAM_BATCH_SIZE> send_req;
+            uv_udp_send_t req;
+            std::array<char, max_pkt_size> buf;
         };
-        void release(packet_storage* storage)
-        {
-            if (--storage->refs == 0)
-                delete storage;
-        }
         extern "C" void packet_storage_release(uv_udp_send_t* send, int code)
         {
-            release(static_cast<packet_storage*>(send->data));
+            delete static_cast<packet_storage*>(send->data);
         }
     }  // namespace
 #endif
 
-    int GSO_USED = 0;
-    int GSO_NOT = 0;
-
-    io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, const size_t n_pkts)
+    io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, size_t& n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-        assert(n_pkts <= DATAGRAM_BATCH_SIZE);
+        assert(n_pkts >= 1 && n_pkts <= DATAGRAM_BATCH_SIZE);
 
         auto handle = get_handle(p);
         assert(handle);
 
-        log::trace(log_cat, "Sending {} UDP packets to {}...", n_pkts, p.remote);
+        log::trace(log_cat, "Sending UDP packet to {}...", p.remote);
 
 #ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
-        // Avoid allocations by each packet by doing just one allocation for the whole batch with a
-        // crude reference counter so that we destruct it once when the full batch of packets is
-        // sent.  This also requires us to go through raw libuv because uvw insists on owning a
-        // complete buffer for each packet.
-        auto packet_data = new packet_storage{};
-        size_t agg_size = 0;
-        for (int i = 0; i < n_pkts; i++)
-            agg_size += bufsize[i];
-        packet_data->data.resize(agg_size);
-        packet_data->refs = n_pkts;
-        std::memcpy(packet_data->data.data(), buf, agg_size);
+        static_assert(DATAGRAM_BATCH_SIZE == 1);
+        n_pkts = 0;  // We are either sending, or exiting via error (*not* including blocking) so
+                     // either way reset this to zero.
+        assert(bufsize[0] > 0);
+        auto* packet_data = new packet_storage{};
+        std::memcpy(packet_data->buf.data(), buf, bufsize[0]);
+        packet_data->req.data = packet_data;
 
-        packet_data->refs++;  // Hold an extra reference to prevent destruction before we return
+        uv_buf_t uv_buf;
+        uv_buf.base = packet_data->buf.data();
+        uv_buf.len = bufsize[0];
 
-        auto* bufpos = packet_data->data.data();
-
-        for (int i = 0; i < n_pkts; ++i)
+        auto rv = uv_udp_send(&packet_data->req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
+        if (rv != 0)
         {
-            assert(bufsize[i] > 0);
-
-            uv_buf_t uv_buf;
-            uv_buf.base = bufpos;
-            uv_buf.len = bufsize[i];
-            bufpos += bufsize[i];
-
-            packet_data->refs++;
-
-#ifndef NDEBUG
-            bufsize[i] = 0;
-#endif
-
-            auto* send_req = &packet_data->send_req[i];
-            send_req->data = packet_data;
-
-            auto rv = uv_udp_send(send_req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
-
-            if (rv != 0)  // This is a libuv error, *not* a udp send error, so we have to clean up
-            {
-                release(packet_data);  // Delete our outer extra reference
-                release(packet_data);  // Delete the reference for this packet
-                return io_result{rv};
-            }
+            // This is a libuv error, which means it isn't calling our release so we have to do it.
+            // (This cannot be a EAGAIN-type error, though, because the above call queues on blocked
+            // IO).
+            delete packet_data;
+            // We don't have an easy way to go from libuv error codes to standard system error codes
+            // (which io_result expects) so log it and return something somewhat generic:
+            log::warning(log_cat, "Failed to send packet via libuv: {}", uv_strerror(rv));
+            return io_result{EINVAL};
         }
 
-        // Delete our overarching outer extra reference
-        release(packet_data);
+        return io_result{};
 
-        return io_result{0};
+#else
 
-#elif !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
+#if !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
         uv_os_fd_t fd;
         int rv = uv_fileno(reinterpret_cast<uv_handle_t*>(handle.get()), &fd);
         if (rv != 0)
             return io_result{EBADF};
 
 #if defined(__linux__) && !defined(OXEN_LIBQUIC_UDP_NO_GSO) && defined(UDP_SEGMENT)
-        uint16_t gso_size = (n_pkts > 1 && bufsize[0] >= bufsize[n_pkts - 1]) ? bufsize[0] : 0;
-        for (int i = 1; gso_size != 0 && i < n_pkts - 1; i++)
+#define OXEN_LIBQUIC_SEND_TYPE "GSO"
+
+        // With GSO, we use *one* sendmmsg call which can contain multiple batches of packets; each
+        // batch is of size n, where each of the n have the same size.
+        //
+        // We could have up to the full DATAGRAM_BATCH_SIZE, with the worst case being every packet
+        // being a different size than the one before it.
+        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
+        std::array<iovec, DATAGRAM_BATCH_SIZE> iovs{};
+        std::array<std::array<char, CMSG_SPACE(sizeof(uint16_t))>, DATAGRAM_BATCH_SIZE> controls{};
+        std::array<uint16_t, DATAGRAM_BATCH_SIZE> gso_sizes{};   // Size of each of the packets
+        std::array<uint16_t, DATAGRAM_BATCH_SIZE> gso_counts{};  // Number of packets
+
+        unsigned int msg_count = 0;
+        auto* next_buf = buf;
+        for (int i = 0; i < n_pkts; i++)
         {
-            if (bufsize[i] != gso_size || bufsize[i] < bufsize[n_pkts - 1])
-            {
-                gso_size = 0;
-                break;
-            }
-        }
+            auto& gso_size = gso_sizes[msg_count];
+            auto& gso_count = gso_counts[msg_count];
+            gso_count++;
+            if (gso_size == 0)
+                gso_size = bufsize[i]; // new batch
 
-        if (gso_size)
-        {
+            if (i < n_pkts - 1 && bufsize[i+1] == gso_size)
+                continue; // The next one can be batched with us
 
-            GSO_USED++;
+            // We're now either on the last packet, or on a "+1" packet with a size different from
+            // its predecessor.
+            assert(i == n_pkts - 1 || bufsize[i - 1] != bufsize[i]);
 
-            iovec iov{};
-            mmsghdr msgs{};
-            iov.iov_base = buf;
-            iov.iov_len = (n_pkts - 1) * gso_size + bufsize[n_pkts - 1];
-            auto& hdr = msgs.msg_hdr;
+            auto& iov = iovs[msg_count];
+            auto& msg = msgs[msg_count];
+            iov.iov_base = next_buf;
+            iov.iov_len = gso_count * gso_size;
+            next_buf += iov.iov_len;
+            msg_count++;
+            auto& hdr = msg.msg_hdr;
             hdr.msg_iov = &iov;
             hdr.msg_iovlen = 1;
             hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
             hdr.msg_namelen = p.remote.socklen();
-            std::array<char, CMSG_SPACE(sizeof(uint16_t))> control{};
-            hdr.msg_control = control.data();
-            hdr.msg_controllen = control.size();
-            auto* cm = CMSG_FIRSTHDR(&hdr);
-            cm->cmsg_level = SOL_UDP;
-            cm->cmsg_type = UDP_SEGMENT;
-            cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
-            *reinterpret_cast<uint16_t*>(CMSG_DATA(cm)) = gso_size;
-
-            do
-            {
-                rv = sendmmsg(fd, &msgs, 1, 0);
-            } while (rv == -1 && errno == EINTR);
-        }
-        else
-#endif  // linux GSO
-        {
-            std::array<iovec, DATAGRAM_BATCH_SIZE> iov{};
-            std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
-
-            GSO_NOT++;
-
-            for (int i = 0; i < n_pkts; i++)
-            {
-                assert(bufsize[i] > 0);
-
-                iov[i].iov_base = buf;
-                iov[i].iov_len = bufsize[i];
-                buf += bufsize[i];
-
-                auto& hdr = msgs[i].msg_hdr;
-                hdr.msg_iov = &iov[i];
-                hdr.msg_iovlen = 1;
-                hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
-                hdr.msg_namelen = p.remote.socklen();
+            if (gso_count > 1) {
+                auto& control = controls[msg_count];
+                hdr.msg_control = control.data();
+                hdr.msg_controllen = control.size();
+                auto* cm = CMSG_FIRSTHDR(&hdr);
+                cm->cmsg_level = SOL_UDP;
+                cm->cmsg_type = UDP_SEGMENT;
+                cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+                *reinterpret_cast<uint16_t*>(CMSG_DATA(cm)) = gso_size;
             }
-
-            do
-            {
-                rv = sendmmsg(fd, msgs.data(), n_pkts, 0);
-            } while (rv == -1 && errno == EINTR);
         }
 
+        do
+        {
+            rv = sendmmsg(fd, msgs.data(), msg_count, 0);
+        } while (rv == -1 && errno == EINTR);
+
+        if (rv == -1 && errno != EAGAIN && errno != EWOULDBLOCK)
+        {
+            n_pkts = 0;  // Drop the packets since we got some serious error
+            return io_result{errno};
+        }
+
+        // Figure out number of packets we actually sent:
+        // rv is the number of `msgs` elements that were updated; within each, the `.msg_len` field
+        // has been updated to the number of bytes that were sent (which we need to use to figure
+        // out how many actual batched packets went out from our batch-of-batches).
+        size_t sent = 0;
 #ifndef NDEBUG
-        std::fill(bufsize, bufsize + n_pkts, 0);
+        bool found_unsent = false;
 #endif
+        if (rv > 0)
+        {
+            for (unsigned int i = 0; i < msg_count; i++)
+            {
+                if (msgs[i].msg_len < iovs[i].iov_len)
+                {
+#ifndef NDEBUG
+                    // Once we encounter some unsent we expect to miss everything after that (i.e. we
+                    // are expecting that contiguous packets 0 through X are accepted and X+1 through
+                    // the end were not): so if this batch was partially sent then we shouldn't have
+                    // been any partial sends before it.
+                    assert(!found_unsent || msgs[i].msg_len == 0);
+                    found_unsent = true;
+#endif
+
+                    // Partial packets consumed should be impossible:
+                    assert(msgs[i].msg_len % gso_sizes[i] == 0);
+                    sent += msgs[i].msg_len / gso_sizes[i];
+                }
+                else
+                {
+                    assert(!found_unsent);
+                    sent += gso_counts[i];
+                }
+            }
+        }
 
         io_result ret{rv == -1 ? errno : 0};
 
-        if (ret.failure())
-            log::error(log_cat, "Error sending packet to {}: {}", p.remote.to_string(), ret.str());
+#else  // sendmmsg, but not GSO
+#define OXEN_LIBQUIC_SEND_TYPE "sendmmsg"
 
-        return ret;
+        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
+        std::array<iovec, DATAGRAM_BATCH_SIZE> iov{};
 
-#else  // No sendmmsg; just do a series of try_send calls
+        for (int i = 0; i < n_pkts; i++)
+        {
+            assert(bufsize[i] > 0);
 
+            iov[i].iov_base = buf;
+            iov[i].iov_len = bufsize[i];
+            buf += bufsize[i];
+
+            auto& hdr = msgs[i].msg_hdr;
+            hdr.msg_iov = &iov[i];
+            hdr.msg_iovlen = 1;
+            hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
+            hdr.msg_namelen = p.remote.socklen();
+        }
+
+        do
+        {
+            rv = sendmmsg(fd, msgs.data(), n_pkts, MSG_DONTWAIT);
+        } while (rv == -1 && errno == EINTR);
+
+        if (rv == -1 && errno != EAGAIN && errno != EWOULDBLOCK)
+        {
+            n_pkts = 0;  // Serious error; drop the packets
+            return io_result{errno};
+        }
+
+        size_t sent = rv >= 0 ? rv : 0;
+
+        io_result ret{rv == -1 ? errno : 0};
+
+#endif
+
+#else  // No sendmmsg at all, instead we use libuv's try_send for each packet
+#define OXEN_LIBQUIC_SEND_TYPE "uv_udp_try_send"
         uv_buf_t uv_buf;
         uv_buf.base = buf;
+        int sent = 0;
+        io_result ret{};
         for (int i = 0; i < n_pkts; ++i)
         {
             assert(bufsize[i] > 0);
@@ -463,27 +500,50 @@ namespace oxen::quic
             uv_buf.len = bufsize[i];
 
             auto rv = uv_udp_try_send(handle.get(), &uv_buf, 1, p.remote);
-
             assert(rv == bufsize[i] || rv < 0);
-
-            uv_buf.base += uv_buf.len;
-
-#ifndef NDEBUG
-            bufsize[i] = 0;
-#endif
-
             if (rv < 0)
             {
-                // Only debug because this is expected to fail sometime, i.e. if we're cramming
-                // packets faster than the kernel is willing to accept them (and the failure is
-                // okay: we'll return the error and retry sending later).
-                log::debug(log_cat, "Error {} sending packet to {}", rv, p.remote);
-                return io_result{rv};
+                ret = io_result::libuv(rv);
+                break;
             }
+
+            sent++;
+            uv_buf.base += uv_buf.len;
+        }
+#endif
+
+        if (ret.failure() && !ret.blocked())
+        {
+            log::error(log_cat, "Error sending packets to {}: {}", p.remote, ret.str());
+            n_pkts = 0;  // Drop any packets, as we had a serious error
+            return ret;
         }
 
-        return io_result{0};
-#endif
+        if (sent == 0)  // Didn't send *any* packets, i.e. we got entirely blocked
+            // FIXME DEBUG: should be debug level:
+            log::critical(log_cat, OXEN_LIBQUIC_SEND_TYPE " sent none of {}", n_pkts);
+
+        else if (sent < n_pkts)
+        {
+            // We sent some but not all, so shift the unsent packets back to the beginning of buf/bufsize
+            // FIXME DEBUG: should be debug level:
+            log::critical(log_cat, OXEN_LIBQUIC_SEND_TYPE " undersent {}/{}", sent, n_pkts);
+            size_t offset = std::accumulate(bufsize, bufsize + sent, size_t{0});
+            size_t len = std::accumulate(bufsize + sent, bufsize + n_pkts, size_t{0});
+            std::memmove(buf, buf + offset, len);
+            std::copy(bufsize, bufsize + (n_pkts - sent), bufsize + sent);
+            n_pkts -= sent;
+        }
+        else
+            n_pkts = 0;
+
+        // We always return EAGAIN if we failed to send all, even if that isn't strictly what we got
+        // back as the return value (sendmmsg gives back a non-error on *partial* success).
+        if (sent < n_pkts)
+            return io_result{EAGAIN};
+
+        return ret;
+#endif  // not LIBUV queuing
     }
 
     namespace

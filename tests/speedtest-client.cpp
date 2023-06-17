@@ -17,13 +17,14 @@
 
 using namespace oxen::quic;
 
-namespace oxen::quic {
-    extern int GSO_USED, GSO_NOT;
-extern int64_t DEBUG_acks;
-extern int64_t DEBUG_ack_data;
-extern int64_t total_packets_like_ever;
-extern int64_t total_stream_data;
-}
+namespace oxen::quic
+{
+    extern int64_t DEBUG_acks;
+    extern int64_t DEBUG_ack_data;
+    extern int64_t total_packets_like_ever;
+    extern int64_t total_stream_data;
+    extern int64_t flush_streams_counter;
+}  // namespace oxen::quic
 
 int main(int argc, char* argv[])
 {
@@ -66,6 +67,13 @@ int main(int argc, char* argv[])
 
     bool pregenerate = false;
     cli.add_flag("-g,--pregenerate", pregenerate, "Pregenerate all stream data to send into RAM before starting");
+
+    bool no_blake2b = false;
+    cli.add_flag(
+            "-2,--no-blake2b",
+            no_blake2b,
+            "Disable blake2b data hashing (just use a simple xor byte checksum).  Can make a difference on extremely low "
+            "latency (e.g. localhost) connections.  Should be specified on the server as well.");
 
     size_t chunk_size = 64_ki, chunk_num = 2;
     cli.add_option("--stream-chunk-size", chunk_size, "How much data to queue at once, per chunk");
@@ -135,6 +143,7 @@ int main(int argc, char* argv[])
         size_t next_buf = 0;
 
         std::basic_string<std::byte> hash;
+        uint8_t checksum = 0;
         crypto_generichash_blake2b_state sent_hasher, recv_hasher;
 
         stream_data() {}
@@ -182,7 +191,7 @@ int main(int argc, char* argv[])
             sd.done = true;
             return;
         }
-        if (data.size() != 32)
+        if (data.size() != 33)
         {
             log::error(test_cat, "Got unexpected data from the other side: {}B != 32B", data.size());
             sd.failed = true;
@@ -190,7 +199,7 @@ int main(int argc, char* argv[])
             return;
         }
 
-        if (data != sd.hash)
+        if (data.substr(0, 32) != sd.hash)
         {
             log::critical(
                     test_cat,
@@ -200,12 +209,29 @@ int main(int argc, char* argv[])
             sd.failed = true;
             sd.done = true;
         }
+        if (static_cast<uint8_t>(data[32]) != sd.checksum)
+        {
+            log::critical(test_cat, "Checksum mismatch: other size said {}, we say {}", data[32], sd.checksum);
+            sd.failed = true;
+            sd.done = true;
+        }
 
-        log::critical(test_cat, "Hashes matched, hurray!");
+        if (!sd.failed)
+            log::critical(
+                    test_cat,
+                    "Hashes matched ({}, {}), hurray!\n",
+                    oxenc::to_hex(sd.hash.begin(), sd.hash.end()),
+                    sd.checksum);
 
-        log::warning(test_cat, "Stats: {} acks received for {}B; {} packets sent containing {}B",
-                DEBUG_acks, DEBUG_ack_data, total_packets_like_ever, total_stream_data);
+        log::warning(
+                test_cat,
+                "Stats: {} acks received for {}B; {} packets sent containing {}B\n",
+                DEBUG_acks,
+                DEBUG_ack_data,
+                total_packets_like_ever,
+                total_stream_data);
 
+        log::warning(test_cat, "flush_streams called {} times\n", flush_streams_counter);
 
         sd.failed = false;
         sd.done = true;
@@ -213,7 +239,11 @@ int main(int argc, char* argv[])
 
     auto per_stream = size / parallel;
 
-    auto gen_data = [](RNG& rng, size_t size, std::vector<std::byte>& data, crypto_generichash_blake2b_state& hasher) {
+    auto gen_data = [no_blake2b](RNG& rng,
+                       size_t size,
+                       std::vector<std::byte>& data,
+                       crypto_generichash_blake2b_state& hasher,
+                       uint8_t& checksum) {
         assert(size > 0);
 
         using RNG_val = RNG::result_type;
@@ -235,11 +265,22 @@ int main(int argc, char* argv[])
             rng_data[i] = static_cast<rng_value>(rng());
         data.resize(size);
 
-        // Hash it (so that we can verify the hash response at the end)
-        crypto_generichash_blake2b_update(&hasher, reinterpret_cast<unsigned char*>(data.data()), data.size());
+        // Hash/checksum it (so that we can verify the hash response at the end)
+        uint64_t csum = 0;
+        const uint64_t* stuff = reinterpret_cast<const uint64_t*>(data.data());
+        for (size_t i = 0; i < data.size() / 8; i++)
+            csum ^= stuff[i];
+        for (int i = 0; i < 8; i++)
+            checksum ^= reinterpret_cast<const uint8_t*>(&csum)[i];
+        for (size_t i = data.size() & ~0b111; i < data.size(); i++)
+            checksum ^= static_cast<uint8_t>(data[i]);
+
+        if (!no_blake2b)
+            crypto_generichash_blake2b_update(&hasher, reinterpret_cast<unsigned char*>(data.data()), data.size());
     };
 
-    if (pregenerate) {
+    if (pregenerate)
+    {
         log::warning(test_cat, "Pregenerating data...");
     }
 
@@ -251,12 +292,13 @@ int main(int argc, char* argv[])
 
         if (pregenerate)
         {
-            gen_data(s.rng, my_data, s.bufs[0], s.sent_hasher);
+            gen_data(s.rng, my_data, s.bufs[0], s.sent_hasher, s.checksum);
             s.hash.resize(32);
             crypto_generichash_blake2b_final(&s.sent_hasher, reinterpret_cast<unsigned char*>(s.hash.data()), s.hash.size());
         }
     }
-    if (pregenerate) {
+    if (pregenerate)
+    {
         log::warning(test_cat, "Data pregeneration done");
     }
 
@@ -288,7 +330,7 @@ int main(int argc, char* argv[])
                         if (size == 0)
                             return nullptr;
 
-                        gen_data(sd.rng, size, data, sd.sent_hasher);
+                        gen_data(sd.rng, size, data, sd.sent_hasher, sd.checksum);
 
                         sd.remaining -= size;
 
@@ -336,8 +378,12 @@ int main(int argc, char* argv[])
         fmt::print("OMG failed!\n");
 
     auto elapsed = std::chrono::duration<double>{std::chrono::steady_clock::now() - started_at}.count();
-    fmt::print("Stats: {} acks received for {}B; {} packets sent containing {}B; used GSO for {}/{}",
-            DEBUG_acks, DEBUG_ack_data, total_packets_like_ever, total_stream_data, GSO_USED, GSO_NOT+GSO_USED);
+    fmt::print(
+            "Stats: {} acks received for {}B; {} packets sent containing {}B",
+            DEBUG_acks,
+            DEBUG_ack_data,
+            total_packets_like_ever,
+            total_stream_data);
     fmt::print("Elapsed time: {:.3f}s\n", elapsed);
     fmt::print("Speed: {:.3f}MB/s\n", size / 1'000'000.0 / elapsed);
 

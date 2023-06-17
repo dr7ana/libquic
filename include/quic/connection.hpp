@@ -34,8 +34,6 @@ namespace oxen::quic
 
         int init(ngtcp2_settings& settings, ngtcp2_transport_params& params, ngtcp2_callbacks& callbacks);
 
-        ngtcp2_pkt_info pkt_info{};
-
       public:
         // underlying ngtcp2 connection object
         std::unique_ptr<ngtcp2_conn, connection_deleter> conn;
@@ -87,11 +85,17 @@ namespace oxen::quic
 
         void on_io_ready();
 
-        io_result send(uint8_t* buf, size_t* bufsize, size_t& n_packets, uint64_t ts);
+        struct pkt_tx_timer_updater;
+        bool send(pkt_tx_timer_updater* pkt_updater = nullptr);
 
         void flush_streams(uint64_t ts);
 
         void io_ready();
+
+        std::array<uint8_t, NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE * DATAGRAM_BATCH_SIZE> send_buffer;
+        std::array<size_t, DATAGRAM_BATCH_SIZE> send_buffer_size;
+        size_t n_packets = 0;
+        uint8_t* send_buffer_pos = send_buffer.data();
 
         /// Returns a pointer to the owning Server, if this is a Server connection, nullptr
         /// otherwise.

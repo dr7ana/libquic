@@ -5,6 +5,7 @@
 extern "C"
 {
 #include <netinet/in.h>
+#include <uv.h>
 }
 
 #include <string>
@@ -57,7 +58,8 @@ namespace oxen::quic
 
     Address::Address(const std::string& addr, uint16_t port)
     {
-        if (addr.empty()) {
+        if (addr.empty())
+        {
             // Default to all-0 IPv6 address, which is good (it's `::`, the IPv6 any addr)
             reinterpret_cast<sockaddr_in6&>(_sock_addr).sin6_port = port;
         }
@@ -79,7 +81,8 @@ namespace oxen::quic
     std::string Address::to_string() const
     {
         char buf[INET6_ADDRSTRLEN] = {};
-        if (is_ipv6()) {
+        if (is_ipv6())
+        {
             uv_ip6_name(*this, buf, sizeof(buf));
             return "[{}]:{}"_format(buf, port());
         }
@@ -128,6 +131,11 @@ namespace oxen::quic
             out.append(u8"┃");
         }
         return out;
+    }
+
+    std::string_view io_result::str() const
+    {
+        return is_libuv ? uv_strerror(error_code) : is_ngtcp2 ? ngtcp2_strerror(error_code) : strerror(error_code);
     }
 
 }  // namespace oxen::quic

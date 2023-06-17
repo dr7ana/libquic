@@ -254,48 +254,98 @@ namespace oxen::quic
         schedule_retransmit(ts);
     }
 
-    io_result Connection::send(uint8_t* buf, size_t* bufsize, size_t& n_packets, uint64_t ts)
+    // RAII class for calling ngtcp2_conn_update_pkt_tx_timer.  If you don't call cancel() on
+    // this then it calls it upon destruction (i.e. when leaving the scope).  The idea is that
+    // you ignore it normally, and call `return pkt_updater.cancel();` on abnormal exit.
+    struct Connection::pkt_tx_timer_updater
+    {
+      private:
+        bool cancelled = false;
+        Connection& conn;
+        uint64_t ts;
+
+      public:
+        pkt_tx_timer_updater(Connection& c, uint64_t ts) : conn{c}, ts{ts} {}
+        pkt_tx_timer_updater(pkt_tx_timer_updater&& x) = delete;
+        pkt_tx_timer_updater(const pkt_tx_timer_updater& x) = delete;
+
+        void cancel() { cancelled = true; }
+
+        ~pkt_tx_timer_updater()
+        {
+            if (!cancelled)
+                ngtcp2_conn_update_pkt_tx_time(conn, ts);
+        }
+    };
+
+    // Sends the current `n_packets` packets queued in `send_buffer` with individual lengths
+    // `send_buffer_size`.
+    //
+    // Returns true if the caller can keep on sending, false if the caller should return
+    // immediately (i.e. because either an error occured or the socket is blocked).
+    //
+    // In the case where the socket is blocked, this sets up an event to wait for it to become
+    // unblocked, at which point we'll re-enter flush_streams (which will finish off the pending
+    // packets before continuing).
+    //
+    // If pkt_updater is provided then we cancel it when an error (other than a block) occurs.
+    bool Connection::send(pkt_tx_timer_updater* pkt_updater)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         assert(n_packets > 0 && n_packets <= DATAGRAM_BATCH_SIZE);
 
-        auto sent = endpoint.send_packets(path, reinterpret_cast<char*>(buf), bufsize, n_packets);
-        if (sent.blocked())
+        auto rv =
+                endpoint.send_packets(path, reinterpret_cast<char*>(send_buffer.data()), send_buffer_size.data(), n_packets);
+
+        if (rv.blocked())
         {
-            log::warning(log_cat, "Error: Packet send blocked, scheduling retransmit");
-            ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-            schedule_retransmit();
+            assert(n_packets > 0);  // n_packets will be updated to however many are left
+            log::warning(log_cat, "Error: Packet send blocked, scheduling retransmit when socket becomes available");
+
+            // FIXME: set up a can-write event handler
+            log::critical(log_cat, "FIXME: need a can-write event handler here");
+            return false;
         }
-        else if (sent.failure())
+        if (rv.failure())
         {
-            log::warning(log_cat, "Error: I/O error while trying to send packet");
-            ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+            log::warning(log_cat, "Error while trying to send packet: {}", rv.str());
+            log::critical(log_cat, "FIXME: close connection here?");  // FIXME TODO
+            if (pkt_updater)
+                pkt_updater->cancel();
+            return false;
         }
-        else
-            n_packets = 0;
 
         log::trace(log_cat, "Packets away!");
-        return sent;
+        return true;
     }
 
     // Don't worry about seeding this because it doesn't matter at all if the stream selection below
     // is predictable, we just want to shuffle it.
     thread_local std::mt19937 stream_start_rng{};
 
+    int64_t flush_streams_counter = 0;
     int64_t total_packets_like_ever = 0;
     int64_t total_stream_data = 0;
     void Connection::flush_streams(uint64_t ts)
     {
-        int debug_stream_packets = 0, debug_stream_mores = 0, debug_streamn1_packets = 0, debug_streamn1_mores = 0;
+        flush_streams_counter++;
         // Maximum number of stream data packets to send out at once; if we reach this then we'll
         // schedule another event loop call of ourselves (so that we don't starve the loop)
         const auto max_udp_payload_size = ngtcp2_conn_get_path_max_tx_udp_payload_size(conn.get());
         const auto max_stream_packets = ngtcp2_conn_get_send_quantum(conn.get()) / max_udp_payload_size;
         // packet counter held as member attribute
-        uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+
         // uint64_t ts = get_timestamp();
         // log::warning(log_cat, "{} called at {}", __PRETTY_FUNCTION__, ts);
-        pkt_info = {};
+
+        if (n_packets > 0)
+        {
+            // We have leftover packets from the previous attempt that couldn't be sent; try sending
+            // them now.
+            log::trace(log_cat, "Sending {} stream data deferred packets", n_packets);
+            if (!send())
+                return;
+        }
 
         std::list<Stream*> strs;
         if (!streams.empty())
@@ -319,152 +369,49 @@ namespace oxen::quic
             }
         }
 
-        std::array<uint8_t, NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE * DATAGRAM_BATCH_SIZE> send_buffer;
-        std::array<size_t, DATAGRAM_BATCH_SIZE> send_buffer_size;
-        size_t n_packets = 0;
+        // This is our non-stream value (i.e. we give stream id -1 to ngtcp2 when we hit this).  We
+        // hit it after we exhaust all streams (either they have nothing more to give, or we get
+        // congested); it takes care of things like initial handshake packets, acks, and also
+        // finishes off any partially-filled packet from any previous streams that didn't form a
+        // complete packet.
+        strs.push_back(nullptr);
+        auto streams_end_it = std::prev(strs.end());
 
+        ngtcp2_pkt_info pkt_info{};
         auto* buf_pos = send_buffer.data();
-
-        for (size_t stream_packets = 0; stream_packets < max_stream_packets && !strs.empty(); )
+        pkt_tx_timer_updater pkt_updater{*this, ts};
+        size_t stream_packets = 0;
+        while (!strs.empty())
         {
-            for (auto it = strs.begin(); it != strs.end();)
+
+            log::trace(log_cat, "Creating packet {} of max {} batch stream packets", n_packets, DATAGRAM_BATCH_SIZE);
+
+            uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+
+            auto* stream = strs.front();
+            strs.pop_front();  // Pop it off; if this stream should be checked again, append just
+                               // before streams_end_it.
+
+            assert(stream || strs.empty());  // We should only get -1 at the end of the list
+
+            const int64_t stream_id = stream ? stream->stream_id : -1;
+            std::vector<ngtcp2_vec> bufs;
+            if (stream)
             {
-                log::trace(log_cat, "Creating packet {} of max {} batch stream packets", n_packets, DATAGRAM_BATCH_SIZE);
+                bufs = stream->pending();
 
-                auto& stream = **it;
-                auto bufs = stream.pending();
-
-                if (stream.is_closing && !stream.sent_fin && stream.unsent() == 0)
+                if (stream->is_closing && !stream->sent_fin && stream->unsent() == 0)
                 {
                     log::trace(log_cat, "Sending FIN");
                     flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
-                    stream.sent_fin = true;
+                    stream->sent_fin = true;
                 }
                 else if (bufs.empty())
                 {
-                    log::debug(log_cat, "pending() returned empty buffer for stream ID {}, moving on", stream.stream_id);
-                    it = strs.erase(it);
+                    log::debug(log_cat, "pending() returned empty buffer for stream ID {}, moving on", stream_id);
                     continue;
                 }
-
-                /*
-                in "for each stream" loop, keep track of whether or not we're in the middle of a
-                packet, i.e. when we call write_v stream we are starting (or continuing) a packet,
-                and if we call send_packet we finished one.
-
-                then in the next loop (for(;;)), call writev_stream differently based on that, and
-                if we send_packet there we're also no longer in the middle of a packet
-                */
-
-                ngtcp2_ssize ndatalen;
-                auto nwrite = ngtcp2_conn_writev_stream(
-                        conn.get(),
-                        path,
-                        &pkt_info,
-                        buf_pos,
-                        NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE,
-                        &ndatalen,
-                        flags,
-                        stream.stream_id,
-                        bufs.data(),
-                        bufs.size(),
-                        ts);
-
-                log::trace(log_cat, "add_stream_data for stream {} returned [{},{}]", stream.stream_id, nwrite, ndatalen);
-
-                if (nwrite < 0)
-                {
-                    if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
-                    {
-                        debug_stream_mores++;
-                        log::trace(
-                                log_cat, "Consumed {} bytes from stream {} and have space left", ndatalen, stream.stream_id);
-                        assert(ndatalen >= 0);
-                        stream.wrote(ndatalen);
-                        it = strs.erase(it);
-                        continue;
-                    }
-                    if (nwrite == NGTCP2_ERR_CLOSING)  // -230
-                    {
-                        log::debug(log_cat, "Cannot write to {}: stream is closing", stream.stream_id);
-                        it = strs.erase(it);
-                        continue;
-                    }
-                    if (nwrite == NGTCP2_ERR_STREAM_SHUT_WR)  // -230
-                    {
-                        log::debug(log_cat, "Cannot add to stream {}: stream is shut, proceeding", stream.stream_id);
-                        assert(ndatalen == -1);
-                        it = strs.erase(it);
-                        continue;
-                    }
-                    if (nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED)  // -210
-                    {
-                        log::trace(log_cat, "Cannot add to stream {}: stream is blocked", stream.stream_id);
-                        it = strs.erase(it);
-                        continue;
-                    }
-
-                    log::error(log_cat, "Error writing non-stream data: {}", ngtcp2_strerror(nwrite));
-                    break;
-                }
-
-                if (ndatalen >= 0)
-                {
-                    log::trace(log_cat, "consumed {} bytes from stream {}", ndatalen, stream.stream_id);
-                    stream.wrote(ndatalen);
-                    total_stream_data += ndatalen;
-                }
-
-                if (nwrite == 0)  // we are congested
-                {
-                    log::trace(log_cat, "Done stream writing to {} (connection is congested)", stream.stream_id);
-
-                    ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                    // we are congested, so clear pending streams to exit outer loop
-                    // and enter next loop to flush unsent stuff
-                    strs.clear();
-                    break;
-                }
-
-                debug_stream_packets++;
-                buf_pos += nwrite;
-                send_buffer_size[n_packets++] = nwrite;
-                stream_packets += 1;
-
-                if (n_packets == DATAGRAM_BATCH_SIZE)
-                {
-                    log::trace(log_cat, "Sending stream data packet batch");
-                    if (auto rv = send(send_buffer.data(), send_buffer_size.data(), n_packets, ts); rv.failure())
-                    {
-                        log::error(log_cat, "Failed to send stream packets: got error code {}", rv.str());
-                        return;
-                    }
-
-                    buf_pos = send_buffer.data();
-
-                    ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                    if (stream.unsent() == 0)
-                        it = strs.erase(it);
-                    else
-                        ++it;
-                }
-
-                if (stream_packets == max_stream_packets)
-                {
-                    log::trace(log_cat, "Max stream packets ({}) reached", max_stream_packets);
-                    ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                    return;
-                }
             }
-        }
-
-        // Now try more with stream id -1 and no data: this takes care of things like initial
-        // handshake packets, and also finishes off any partially-filled packet from above.
-        for (;;)
-        {
-            log::trace(log_cat, "Calling add_stream_data for empty stream");
-
-            auto& buf = send_buffer[n_packets];
 
             ngtcp2_ssize ndatalen;
             auto nwrite = ngtcp2_conn_writev_stream(
@@ -475,80 +422,100 @@ namespace oxen::quic
                     NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE,
                     &ndatalen,
                     flags,
-                    -1,
-                    nullptr,
-                    0,
+                    stream_id,
+                    bufs.data(),
+                    bufs.size(),
                     ts);
 
-            log::trace(log_cat, "add_stream_data for non-stream returned [{},{}]", nwrite, ndatalen);
-            assert(ndatalen <= 0);
-
-            if (nwrite == 0)
-            {
-                log::trace(log_cat, "Nothing else to write for non-stream data for now (or we are congested)");
-                break;
-            }
+            log::trace(log_cat, "add_stream_data for stream {} returned [{},{}]", stream_id, nwrite, ndatalen);
 
             if (nwrite < 0)
             {
                 if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
                 {
-                    debug_streamn1_mores++;
-                    log::trace(log_cat, "Writing non-stream data frames, and have space left");
-                    ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                    continue;
+                    log::trace(log_cat, "Consumed {} bytes from stream {} and have space left", ndatalen, stream_id);
+                    assert(ndatalen >= 0);
+                    if (stream)
+                        stream->wrote(ndatalen);
+                    // If we had more data on the stream, we wouldn't have got a WRITE_MORE, so
+                    // don't need to re-add the stream to strs.
                 }
-                if (nwrite == NGTCP2_ERR_CLOSING)  // -230
-                {
-                    log::warning(log_cat, "Error writing non-stream data: {}", ngtcp2_strerror(nwrite));
-                    break;
-                }
-                if (nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED)  // -210
-                {
-                    log::info(log_cat, "Cannot add to empty stream right now: stream is blocked");
-                    break;
-                }
+                else if (nwrite == NGTCP2_ERR_CLOSING)  // -230
+                    log::debug(log_cat, "Cannot write to {}: connection is closing", stream_id);
+                else if (nwrite == NGTCP2_ERR_STREAM_SHUT_WR)  // -221
+                    log::debug(log_cat, "Cannot add to stream {}: stream is shut, proceeding", stream_id);
+                else if (nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED)  // -210
+                    log::debug(log_cat, "Cannot add to stream {}: stream is blocked", stream_id);
+                else
+                    log::error(log_cat, "Error writing stream data: {}", ngtcp2_strerror(nwrite));
 
-                log::warning(log_cat, "Error writing non-stream data: {}", ngtcp2_strerror(nwrite));
-                break;
+                continue;
             }
 
-            debug_streamn1_packets++;
+            if (nwrite == 0)  // we are congested (or done)
+            {
+                log::trace(
+                        log_cat,
+                        "Done stream writing to {} ({}connection is congested)",
+                        stream_id,
+                        stream ? "" : "nothing else to write or ");
+                if (stream)
+                    // we are congested, so clear all pending streams (aside from the -1
+                    // pseudo-stream at the end) so that our next call hits the -1 to finish off.
+                    strs.erase(strs.begin(), streams_end_it);
+                continue;
+            }
+
+            if (ndatalen > 0 && stream)
+            {
+                log::trace(log_cat, "consumed {} bytes from stream {}", ndatalen, stream_id);
+                stream->wrote(ndatalen);
+                total_stream_data += ndatalen;
+            }
+
+            total_packets_like_ever++;
             buf_pos += nwrite;
             send_buffer_size[n_packets++] = nwrite;
+            stream_packets++;
 
             if (n_packets == DATAGRAM_BATCH_SIZE)
             {
-                log::trace(log_cat, "Sending packet batch with non-stream data frames");
-                if (auto rv = send(send_buffer.data(), send_buffer_size.data(), n_packets, ts); rv.failure())
+                log::trace(log_cat, "Sending stream data packet batch");
+                if (!send(&pkt_updater))
                     return;
 
+                assert(n_packets == 0);
                 buf_pos = send_buffer.data();
+            }
 
-                ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+            if (stream_packets == max_stream_packets)
+            {
+                log::trace(log_cat, "Max stream packets ({}) reached", max_stream_packets);
+                break;
+            }
+
+            if (!stream)
+            {
+                // For the -1 pseudo stream, we only exit once we get nwrite==0 above, so always
+                // re-insert it if we get here.
+                assert(strs.empty());
+                strs.push_back(stream);
+            }
+            else if (stream->unsent() > 0)
+            {
+                // For an actual stream with more data we want to let it be checked again, so
+                // insert it just before the final -1 fake stream for potential reconsideration.
+                assert(!strs.empty());
+                strs.insert(streams_end_it, stream);
             }
         }
 
         if (n_packets > 0)
         {
-            log::trace(log_cat, "Sending packet batch with {} remaining data frames", n_packets);
-            if (auto rv = send(send_buffer.data(), send_buffer_size.data(), n_packets, ts); rv.failure())
-                return;
-            ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+            log::trace(log_cat, "Sending final packet batch of {} packets", n_packets);
+            send(&pkt_updater);
         }
         log::debug(log_cat, "Exiting flush_streams()");
-        /*
-        log::warning(log_cat, "flush_streams stats: {} stream more, {} stream packets, {} \"-1\" more, {} \"-1\" packets",
-                debug_stream_mores, debug_stream_packets, debug_streamn1_mores, debug_streamn1_packets);
-                */
-        total_packets_like_ever += debug_stream_packets;
-        total_packets_like_ever += debug_stream_mores;
-        total_packets_like_ever += debug_streamn1_packets;
-        total_packets_like_ever += debug_streamn1_mores;
-        /*
-        log::warning(log_cat, "omg: total packets like ever = {} ({}B), total acks ever = {} ({}B)",
-                total_packets_like_ever, total_stream_data, DEBUG_acks, DEBUG_ack_data);
-                */
     }
 
     void Connection::schedule_retransmit(uint64_t ts)
