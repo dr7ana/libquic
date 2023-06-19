@@ -779,9 +779,9 @@ namespace oxen::quic
         ngtcp2_settings_default(&settings);
 
         settings.initial_ts = get_timestamp();
-#ifndef NDEBUG
+//#ifndef NDEBUG
         settings.log_printf = log_printer;
-#endif
+//#endif
         settings.max_tx_udp_payload_size = NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE;
         settings.cc_algo = NGTCP2_CC_ALGO_CUBIC;
         settings.initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT;
