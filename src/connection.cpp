@@ -279,6 +279,8 @@ namespace oxen::quic
         }
     };
 
+    int64_t sent_counter = 0;
+
     // Sends the current `n_packets` packets queued in `send_buffer` with individual lengths
     // `send_buffer_size`.
     //
@@ -294,6 +296,8 @@ namespace oxen::quic
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         assert(n_packets > 0 && n_packets <= MAX_BATCH);
+
+        sent_counter += n_packets;
 
         auto rv =
                 endpoint.send_packets(path, reinterpret_cast<char*>(send_buffer.data()), send_buffer_size.data(), n_packets);

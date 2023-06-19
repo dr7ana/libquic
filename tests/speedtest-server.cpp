@@ -21,6 +21,8 @@ namespace oxen::quic
     extern int64_t DEBUG_ack_data;
     extern int64_t total_packets_like_ever;
     extern int64_t total_stream_data;
+    extern int64_t sent_counter;
+    extern int64_t receive_counter;
 }  // namespace oxen::quic
 
 int main(int argc, char* argv[])
@@ -168,8 +170,10 @@ int main(int argc, char* argv[])
     log::debug(test_cat, "Starting event loop thread...");
     auto [ev_thread, running, done] = spawn_event_loop(server_net);
 
-    while (done.wait_for(3s) != std::future_status::ready)
+    while (done.wait_for(1s) != std::future_status::ready) {
+        log::critical(test_cat, "Counts: {} sent, {} received", sent_counter, receive_counter);
         log::info(test_cat, "waiting...");
+    }
 
     ev_thread.join();
 

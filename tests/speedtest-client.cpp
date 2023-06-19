@@ -24,6 +24,7 @@ namespace oxen::quic
     extern int64_t total_packets_like_ever;
     extern int64_t total_stream_data;
     extern int64_t flush_streams_counter;
+    extern int64_t sent_counter, receive_counter;
 }  // namespace oxen::quic
 
 int main(int argc, char* argv[])
@@ -349,6 +350,7 @@ int main(int argc, char* argv[])
         }
     }
 
+    auto last_print = std::chrono::steady_clock::now();
     while (done.wait_for(20ms) != std::future_status::ready)
     {
         bool all_done = true;
@@ -360,9 +362,14 @@ int main(int argc, char* argv[])
                 break;
             }
         }
+        if (auto now = std::chrono::steady_clock::now(); now >= last_print + 1s) {
+            log::critical(test_cat, "Packet counts: {} sent, {} received", sent_counter, receive_counter);
+            last_print = now;
+        }
         if (all_done)
             break;
     }
+    log::critical(test_cat, "Final packet counts: {} sent, {} received", sent_counter, receive_counter);
 
     bool all_good = true;
     for (auto& s : streams)

@@ -73,6 +73,8 @@ namespace oxen::quic
         ev_loop->run();
     }
 
+    int64_t receive_counter = 0;
+
     namespace
     {
         struct udp_data
@@ -102,6 +104,7 @@ namespace oxen::quic
         {
             if (nread > 0 || (nread == 0 && addr != nullptr))
             {
+                receive_counter++;
                 Packet pkt{};
                 pkt.data = {reinterpret_cast<const std::byte*>(buf_raw->base), static_cast<size_t>(nread)};
                 sockaddr_storage local_s_store;
@@ -138,6 +141,14 @@ namespace oxen::quic
                     endpoint->handle_packet(pkt);
                 else
                     log::warning(log_cat, "{} packet handling unsuccessful", data.server ? "Server" : "Client");
+            }
+            else if (nread == 0)
+            {
+                // This is libuv telling us its done with the recvmmsg batch
+            }
+            else
+            {
+                log::warning(log_cat, "recv_callback error {}", nread);
             }
         }
     }  // namespace
