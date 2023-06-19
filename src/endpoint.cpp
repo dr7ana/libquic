@@ -404,10 +404,6 @@ namespace oxen::quic
             if (i < n_pkts - 1 && bufsize[i + 1] == gso_size)
                 continue;  // The next one can be batched with us
 
-            // We're now either on the last packet, or on a "+1" packet with a size different from
-            // its predecessor.
-            assert(i == n_pkts - 1 || bufsize[i - 1] != bufsize[i]);
-
             auto& iov = iovs[msg_count];
             auto& msg = msgs[msg_count];
             iov.iov_base = next_buf;
