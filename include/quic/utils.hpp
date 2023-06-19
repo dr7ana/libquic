@@ -118,13 +118,8 @@ namespace oxen::quic
     using stream_open_callback_t = std::function<uint64_t(Stream&)>;
     using unblocked_callback_t = std::function<bool(Stream&)>;
 
-    inline constexpr size_t DATAGRAM_BATCH_SIZE =
-#if !defined(OXEN_LIBQUIC_UDP_LIBUV_QUEUING) && !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && \
-        (defined(__linux__) || defined(__FreeBSD__))
-            24;
-#else
-            1;
-#endif
+    // Maximum number of packets we can send in one batch when using sendmmsg/GSO
+    inline constexpr size_t DATAGRAM_BATCH_SIZE = 24;
 
     inline constexpr std::byte CLIENT_TO_SERVER{1};
     inline constexpr std::byte SERVER_TO_CLIENT{2};

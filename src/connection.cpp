@@ -22,6 +22,7 @@
 #include "client.hpp"
 #include "endpoint.hpp"
 #include "handler.hpp"
+#include "internal.hpp"
 #include "server.hpp"
 #include "stream.hpp"
 
@@ -292,7 +293,7 @@ namespace oxen::quic
     bool Connection::send(pkt_tx_timer_updater* pkt_updater)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        assert(n_packets > 0 && n_packets <= DATAGRAM_BATCH_SIZE);
+        assert(n_packets > 0 && n_packets <= MAX_BATCH);
 
         auto rv =
                 endpoint.send_packets(path, reinterpret_cast<char*>(send_buffer.data()), send_buffer_size.data(), n_packets);
@@ -384,7 +385,7 @@ namespace oxen::quic
         while (!strs.empty())
         {
 
-            log::trace(log_cat, "Creating packet {} of max {} batch stream packets", n_packets, DATAGRAM_BATCH_SIZE);
+            log::trace(log_cat, "Creating packet {} of max {} batch stream packets", n_packets, MAX_BATCH);
 
             uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
 
@@ -478,7 +479,7 @@ namespace oxen::quic
             send_buffer_size[n_packets++] = nwrite;
             stream_packets++;
 
-            if (n_packets == DATAGRAM_BATCH_SIZE)
+            if (n_packets == MAX_BATCH)
             {
                 log::trace(log_cat, "Sending stream data packet batch");
                 if (!send(&pkt_updater))

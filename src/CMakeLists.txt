@@ -1,10 +1,4 @@
 
-option(LIBQUIC_LIBUV_PACKET_QUEUE "Enables the libuv UDP packet queuing code; disables sendmmsg/GSO support" OFF)
-option(LIBQUIC_SENDMMSG "Enables sendmmsg() use when sending UDP packets, if supported on this system" ON)
-option(LIBQUIC_SEND_GSO "Enables GSO support, if supported on this system (requires LIBQUIC_SENDMMSG=ON)" ON)
-option(LIBQUIC_RECVMMSG "Enables recvmmsg() use when receiving UDP packets, if supported on this system" ON)
-
-
 add_library(quic
     client.cpp
     connection.cpp
@@ -30,19 +24,35 @@ target_link_libraries(quic
     internal
 )
 
-if(LIBQUIC_LIBUV_PACKET_QUEUE)
-    message(STATUS "Building with libuv UDP packet queuing")
+set(libquic_send_default "libuv_queue")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(libquic_send_default "gso")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(libquic_send_default "sendmmsg")
+endif()
+set(libquic_send_allowed "gso, sendmmsg, libuv_try, libuv_queue")
+
+set(LIBQUIC_SEND "${libquic_send_default}" CACHE STRING "Packet send implementation to use; one of: ${libquic_send_allowed}")
+
+
+if(LIBQUIC_SEND STREQUAL "gso")
+    message(STATUS "Building with sendmmsg+GSO packet sender")
+    target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_UDP_GSO)
+elseif(LIBQUIC_SEND STREQUAL "sendmmsg")
+    message(STATUS "Building with sendmmsg (no GSO) packet sender")
+    target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_UDP_SENDMMSG)
+elseif(LIBQUIC_SEND STREQUAL "libuv_queue")
+    message(STATUS "Building with libuv queuing packet sender")
     target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_UDP_LIBUV_QUEUING)
-elseif(NOT LIBQUIC_SENDMMSG)
-    message(STATUS "Building without sendmmsg support")
-    target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_UDP_NO_SENDMMSG)
-elseif(NOT LIBQUIC_SEND_GSO)
-    message(STATUS "Building without GSO support")
-    target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_UDP_NO_GSO)
+elseif(LIBQUIC_SEND STREQUAL "libuv_try")
+    message(STATUS "Building with libuv try_send packet sender")
+    target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_UDP_LIBUV_TRY)
 else()
-    message(STATUS "Building with sendmmsg/GSO, if available on this platform")
+    message(FATAL_ERROR "Unknown -DLIBQUIC_SEND value: '${LIBQUIC_SEND}'; supported values: ${libquic_send_allowed}")
 endif()
 
+
+option(LIBQUIC_RECVMMSG "Enables recvmmsg() use when receiving UDP packets, if supported on this system" ON)
 if(NOT LIBQUIC_RECVMMSG)
     target_compile_definitions(quic PUBLIC OXEN_LIBQUIC_LIBUV_NO_RECVMMSG)
     message(STATUS "Building without recvmmsg support")

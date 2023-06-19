@@ -15,6 +15,7 @@ extern "C"
 
 #include "connection.hpp"
 #include "handler.hpp"
+#include "internal.hpp"
 #include "utils.hpp"
 
 namespace oxen::quic
@@ -270,21 +271,30 @@ namespace oxen::quic
     }
 
     // We support different compilation modes for trying different methods of UDP sending by setting
-    // these defines:
+    // these defines; these shouldn't be set directly but rather through the cmake -DLIBQUIC_SEND
+    // option.  Exactly one of these must be defined.
     //
     // OXEN_LIBQUIC_UDP_LIBUV_QUEUING -- does everything through udp_send, which involves setting up
     // packet queuing.  This is not the default because, in practice, it's slower than just sending
     // directly.
-    // CMake option: -DLIBQUIC_LIBUV_PACKET_QUEUE=ON
+    // CMake option: -DLIBQUIC_SEND=libuv_queue
     //
-    // OXEN_LIBQUIC_UDP_NO_SENDMMSG -- when defined (and not using queuing, above) we always use
-    // libuv's try_send, even when on a platform (Linux, FreeBSD) that supports sendmmsg
-    // multi-packet sending.  By default we use sendmmsg when available.
-    // CMake option: -DLIBQUIC_LIBUV_PACKET_QUEUE=OFF -DLIBQUIC_SENDMMSG=OFF
+    // OXEN_LIBQUIC_UDP_LIBUV_TRY -- use libuv udp_try_send calls to try to send a packet, with or
+    // own internal rescheduling when we block.
+    // CMake option: -DLIBQUIC_SEND=libuv_try
     //
-    // OXEN_LIBQUIC_UDP_NO_GSO -- if defined then don't use GSO (in
-    // favour of sendmmsg) when possible on Linux.
-    // CMake option: -DLIBQUIC_LIBUV_PACKET_QUEUE=OFF -DLIBQUIC_SENDMMSG=ON -DLIBQUIC_SEND_GSO=OFF
+    // OXEN_LIBQUIC_UDP_GSO -- use sendmmsg and GSO to batch-send packets.  Only works on
+    // Linux.
+    // CMake option: -DLIBQUIC_SEND=gso
+    //
+    // OXEN_LIBQUIC_UDP_SENDMMSG -- use sendmmsg (but not GSO) to batch-send packets.  Only works on
+    // Linux and FreeBSD.
+    // CMake option: -DLIBQUIC_SEND=sendmmsg
+
+#if (defined(OXEN_LIBQUIC_UDP_LIBUV_QUEUING) + defined(OXEN_LIBQUIC_UDP_LIBUV_TRY) + defined(OXEN_LIBQUIC_UDP_GSO) + \
+     defined(OXEN_LIBQUIC_UDP_SENDMMSG)) != 1
+#error You must define (exactly) one of OXEN_LIBQUIC_UDP_LIBUV_QUEUING OXEN_LIBQUIC_UDP_LIBUV_TRY OXEN_LIBQUIC_UDP_GSO OXEN_LIBQUIC_UDP_SENDMMSG
+#endif
 
 #ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
     namespace
@@ -305,7 +315,7 @@ namespace oxen::quic
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-        assert(n_pkts >= 1 && n_pkts <= DATAGRAM_BATCH_SIZE);
+        assert(n_pkts >= 1 && n_pkts <= MAX_BATCH);
 
         auto handle = get_handle(p);
         assert(handle);
@@ -313,10 +323,11 @@ namespace oxen::quic
         log::trace(log_cat, "Sending UDP packet to {}...", p.remote);
 
 #ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
-        static_assert(DATAGRAM_BATCH_SIZE == 1);
+        static_assert(MAX_BATCH == 1);
+        assert(n_pkts == 1);
+        assert(bufsize[0] > 0);
         n_pkts = 0;  // We are either sending, or exiting via error (*not* including blocking) so
                      // either way reset this to zero.
-        assert(bufsize[0] > 0);
         auto* packet_data = new packet_storage{};
         std::memcpy(packet_data->buf.data(), buf, bufsize[0]);
         packet_data->req.data = packet_data;
@@ -342,38 +353,38 @@ namespace oxen::quic
 
 #else
 
-#if !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
+#if defined(OXEN_LIBQUIC_UDP_SENDMMSG) || defined(OXEN_LIBQUIC_UDP_GSO)
         uv_os_fd_t fd;
         int rv = uv_fileno(reinterpret_cast<uv_handle_t*>(handle.get()), &fd);
         if (rv != 0)
             return io_result{EBADF};
+        std::array<mmsghdr, MAX_BATCH> msgs{};
+        std::array<iovec, MAX_BATCH> iovs{};
+        auto* next_buf = buf;
 
-#if defined(__linux__) && !defined(OXEN_LIBQUIC_UDP_NO_GSO) && defined(UDP_SEGMENT)
+#ifdef OXEN_LIBQUIC_UDP_GSO
 #define OXEN_LIBQUIC_SEND_TYPE "GSO"
 
         // With GSO, we use *one* sendmmsg call which can contain multiple batches of packets; each
         // batch is of size n, where each of the n have the same size.
         //
-        // We could have up to the full DATAGRAM_BATCH_SIZE, with the worst case being every packet
-        // being a different size than the one before it.
-        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
-        std::array<iovec, DATAGRAM_BATCH_SIZE> iovs{};
-        std::array<std::array<char, CMSG_SPACE(sizeof(uint16_t))>, DATAGRAM_BATCH_SIZE> controls{};
-        std::array<uint16_t, DATAGRAM_BATCH_SIZE> gso_sizes{};   // Size of each of the packets
-        std::array<uint16_t, DATAGRAM_BATCH_SIZE> gso_counts{};  // Number of packets
+        // We could have up to the full MAX_BATCH, with the worst case being every packet being a
+        // different size than the one before it.
+        std::array<std::array<char, CMSG_SPACE(sizeof(uint16_t))>, MAX_BATCH> controls{};
+        std::array<uint16_t, MAX_BATCH> gso_sizes{};   // Size of each of the packets
+        std::array<uint16_t, MAX_BATCH> gso_counts{};  // Number of packets
 
         unsigned int msg_count = 0;
-        auto* next_buf = buf;
         for (int i = 0; i < n_pkts; i++)
         {
             auto& gso_size = gso_sizes[msg_count];
             auto& gso_count = gso_counts[msg_count];
             gso_count++;
             if (gso_size == 0)
-                gso_size = bufsize[i]; // new batch
+                gso_size = bufsize[i];  // new batch
 
-            if (i < n_pkts - 1 && bufsize[i+1] == gso_size)
-                continue; // The next one can be batched with us
+            if (i < n_pkts - 1 && bufsize[i + 1] == gso_size)
+                continue;  // The next one can be batched with us
 
             // We're now either on the last packet, or on a "+1" packet with a size different from
             // its predecessor.
@@ -390,7 +401,8 @@ namespace oxen::quic
             hdr.msg_iovlen = 1;
             hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
             hdr.msg_namelen = p.remote.socklen();
-            if (gso_count > 1) {
+            if (gso_count > 1)
+            {
                 auto& control = controls[msg_count];
                 hdr.msg_control = control.data();
                 hdr.msg_controllen = control.size();
@@ -453,19 +465,16 @@ namespace oxen::quic
 #else  // sendmmsg, but not GSO
 #define OXEN_LIBQUIC_SEND_TYPE "sendmmsg"
 
-        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
-        std::array<iovec, DATAGRAM_BATCH_SIZE> iov{};
-
         for (int i = 0; i < n_pkts; i++)
         {
             assert(bufsize[i] > 0);
 
-            iov[i].iov_base = buf;
-            iov[i].iov_len = bufsize[i];
-            buf += bufsize[i];
+            iovs[i].iov_base = next_buf;
+            iovs[i].iov_len = bufsize[i];
+            next_buf += bufsize[i];
 
             auto& hdr = msgs[i].msg_hdr;
-            hdr.msg_iov = &iov[i];
+            hdr.msg_iov = &iovs[i];
             hdr.msg_iovlen = 1;
             hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
             hdr.msg_namelen = p.remote.socklen();
@@ -488,7 +497,7 @@ namespace oxen::quic
 
 #endif
 
-#else  // No sendmmsg at all, instead we use libuv's try_send for each packet
+#elif defined(OXEN_LIBQUIC_UDP_LIBUV_TRY)  // No sendmmsg at all, instead we use libuv's try_send for each packet
 #define OXEN_LIBQUIC_SEND_TYPE "uv_udp_try_send"
         uv_buf_t uv_buf;
         uv_buf.base = buf;
@@ -511,6 +520,8 @@ namespace oxen::quic
             sent++;
             uv_buf.base += uv_buf.len;
         }
+#else
+#error Unknown quic send type!
 #endif
 
         if (ret.failure() && !ret.blocked())
@@ -532,7 +543,7 @@ namespace oxen::quic
             size_t offset = std::accumulate(bufsize, bufsize + sent, size_t{0});
             size_t len = std::accumulate(bufsize + sent, bufsize + n_pkts, size_t{0});
             std::memmove(buf, buf + offset, len);
-            std::copy(bufsize, bufsize + (n_pkts - sent), bufsize + sent);
+            std::copy(bufsize + sent, bufsize + n_pkts, bufsize);
             n_pkts -= sent;
         }
         else
