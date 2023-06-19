@@ -296,29 +296,66 @@ namespace oxen::quic
 #error You must define (exactly) one of OXEN_LIBQUIC_UDP_LIBUV_QUEUING OXEN_LIBQUIC_UDP_LIBUV_TRY OXEN_LIBQUIC_UDP_GSO OXEN_LIBQUIC_UDP_SENDMMSG
 #endif
 
-#ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
     namespace
     {
         struct packet_storage
         {
             uv_udp_send_t req;
             std::array<char, max_pkt_size> buf;
+            std::function<void()> callback;
+
+            ~packet_storage()
+            {
+                if (callback)
+                    callback();
+            }
         };
         extern "C" void packet_storage_release(uv_udp_send_t* send, int code)
         {
             delete static_cast<packet_storage*>(send->data);
         }
     }  // namespace
-#endif
+
+    io_result Endpoint::send_packet_libuv(Path& p, const char* buf, size_t bufsize, std::function<void()> callback)
+    {
+        auto* packet_data = new packet_storage{};
+        std::memcpy(packet_data->buf.data(), buf, bufsize);
+        packet_data->req.data = packet_data;
+        packet_data->callback = std::move(callback);
+
+        uv_buf_t uv_buf;
+        uv_buf.base = packet_data->buf.data();
+        uv_buf.len = bufsize;
+
+        auto handle = get_handle(p);
+        assert(handle);
+
+        auto rv = uv_udp_send(&packet_data->req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
+        if (rv != 0)
+        {
+            // This is a libuv error, which means it isn't calling our release so we have to do it.
+            // (This cannot be a EAGAIN-type error, though, because the above call queues on blocked
+            // IO).
+            delete packet_data;
+            auto res = io_result::libuv(rv);
+            if (res.blocked())
+            {
+                // We shouldn't get this, and mustn't return it
+                log::warning(log_cat, "Unexpected blocked result from uv_udp_send");
+                return io_result{EINVAL};
+            }
+            log::warning(log_cat, "Failed to send packet via libuv: {}", uv_strerror(rv));
+            return res;
+        }
+
+        return io_result{};
+    }
 
     io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, size_t& n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
         assert(n_pkts >= 1 && n_pkts <= MAX_BATCH);
-
-        auto handle = get_handle(p);
-        assert(handle);
 
         log::trace(log_cat, "Sending UDP packet to {}...", p.remote);
 
@@ -328,30 +365,11 @@ namespace oxen::quic
         assert(bufsize[0] > 0);
         n_pkts = 0;  // We are either sending, or exiting via error (*not* including blocking) so
                      // either way reset this to zero.
-        auto* packet_data = new packet_storage{};
-        std::memcpy(packet_data->buf.data(), buf, bufsize[0]);
-        packet_data->req.data = packet_data;
-
-        uv_buf_t uv_buf;
-        uv_buf.base = packet_data->buf.data();
-        uv_buf.len = bufsize[0];
-
-        auto rv = uv_udp_send(&packet_data->req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
-        if (rv != 0)
-        {
-            // This is a libuv error, which means it isn't calling our release so we have to do it.
-            // (This cannot be a EAGAIN-type error, though, because the above call queues on blocked
-            // IO).
-            delete packet_data;
-            // We don't have an easy way to go from libuv error codes to standard system error codes
-            // (which io_result expects) so log it and return something somewhat generic:
-            log::warning(log_cat, "Failed to send packet via libuv: {}", uv_strerror(rv));
-            return io_result{EINVAL};
-        }
-
-        return io_result{};
+        send_packet_libuv(p, buf, bufsize[0]);
 
 #else
+        auto handle = get_handle(p);
+        assert(handle);
 
 #if defined(OXEN_LIBQUIC_UDP_SENDMMSG) || defined(OXEN_LIBQUIC_UDP_GSO)
         uv_os_fd_t fd;

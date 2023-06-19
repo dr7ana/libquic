@@ -95,6 +95,7 @@ namespace oxen::quic
         io_result read_packet(Connection& conn, Packet& pkt);
 
         io_result send_packets(Path& p, char* buf, size_t* bufsize, size_t& n_pkts);
+        io_result send_packet_libuv(Path& p, const char* buf, size_t bufsize, std::function<void()> after_sent = nullptr);
 
         io_result send_packet(Path& p, bstring_view data);
 

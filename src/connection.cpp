@@ -300,13 +300,31 @@ namespace oxen::quic
 
         if (rv.blocked())
         {
+#ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
+            assert(false);  // queuing mode should never give us a blocked status
+#endif
             assert(n_packets > 0);  // n_packets will be updated to however many are left
-            log::warning(log_cat, "Error: Packet send blocked, scheduling retransmit when socket becomes available");
+            log::warning(log_cat, "Error: Packet send blocked, queuing packets");
 
-            // FIXME: set up a can-write event handler
-            log::critical(log_cat, "FIXME: need a can-write event handler here");
+            // libuv won't allow us to poll its socket, so instead we fire the packets into libuv's
+            // queued send and, when the last one is done, we resume sending packets again using our
+            // own approach.
+            auto* buf = reinterpret_cast<const char*>(send_buffer.data());
+            for (size_t i = 0; i < n_packets; i++)
+            {
+                std::function<void()> callback;
+                if (i == n_packets - 1)
+                    callback = [this] {
+                        log::warning(log_cat, "Socket unblocked, hurray!");
+                        n_packets = 0;
+                        on_io_ready();
+                    };
+                endpoint.send_packet_libuv(path, buf, send_buffer_size[i], std::move(callback));
+                buf += send_buffer_size[i];
+            }
             return false;
         }
+
         if (rv.failure())
         {
             log::warning(log_cat, "Error while trying to send packet: {}", rv.str());
@@ -341,11 +359,11 @@ namespace oxen::quic
 
         if (n_packets > 0)
         {
-            // We have leftover packets from the previous attempt that couldn't be sent; try sending
-            // them now.
-            log::trace(log_cat, "Sending {} stream data deferred packets", n_packets);
-            if (!send())
-                return;
+            // We're blocked from a previous call, and haven't finished sending all our packets yet
+            // so there's nothing to do (when the last pending packet is away libuv will trigger us
+            // again).
+            log::trace(log_cat, "Skipping this flush_streams call; we still have {} queued packets", n_packets);
+            return;
         }
 
         std::list<Stream*> strs;
