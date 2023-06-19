@@ -34,12 +34,14 @@ namespace oxen::quic
 
         int init(ngtcp2_settings& settings, ngtcp2_transport_params& params, ngtcp2_callbacks& callbacks);
 
-      public:
+        std::shared_ptr<uv_udp_t> udp_handle;
+
         // underlying ngtcp2 connection object
         std::unique_ptr<ngtcp2_conn, connection_deleter> conn;
+
+      public:
         // ngtcp2_crypto_conn_ref conn_ref;
         std::shared_ptr<TLSContext> tls_context;
-        std::shared_ptr<uv_udp_t> udp_handle;
 
         Address local;
         Address remote;
@@ -153,9 +155,11 @@ namespace oxen::quic
         std::shared_ptr<uvw::async_handle> io_trigger;
 
         // pass Connection as ngtcp2_conn object
-        operator const ngtcp2_conn*() const { return conn.get(); }
-        operator ngtcp2_conn*() { return conn.get(); }
-        operator ngtcp2_conn&() { return *conn.get(); }
+        template <typename T, std::enable_if_t<std::is_same_v<T, ngtcp2_conn>, int> = 0>
+        operator const T*() const { return conn.get(); }
+        template <typename T, std::enable_if_t<std::is_same_v<T, ngtcp2_conn>, int> = 0>
+        operator T*() { return conn.get(); }
+
     };
 
     extern "C"

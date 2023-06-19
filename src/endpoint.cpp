@@ -97,7 +97,7 @@ namespace oxen::quic
     {
         log::debug(log_cat, "Closing connection (CID: {})", *conn.source_cid.data);
 
-        if (!conn || conn.closing || conn.draining)
+        if (conn.closing || conn.draining)
             return;
 
         if (code == NGTCP2_ERR_IDLE_CLOSE)

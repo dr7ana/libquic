@@ -21,9 +21,6 @@ namespace oxen::quic
     {
         log::trace(log_cat, "Creating Stream object...");
 
-        // copy-assignment of connection UDP handle carries over packet forwarding -> endpoint
-        udp_handle = conn.udp_handle;
-
         close_callback = (close_cb) ? std::move(close_cb) : [](Stream& s, uint64_t error_code) {
             log::warning(log_cat, "Stream close callback called (error code: {})", error_code);
         };

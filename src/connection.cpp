@@ -36,7 +36,7 @@ namespace oxen::quic
         ngtcp2_conn* get_conn(ngtcp2_crypto_conn_ref* conn_ref)
         {
             log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-            return static_cast<Connection*>(conn_ref->user_data)->conn.get();
+            return *static_cast<Connection*>(conn_ref->user_data);
         }
 
         void log_printer(void* user_data, const char* fmt, ...)

@@ -39,7 +39,6 @@ namespace oxen::quic
         Connection& conn;
 
         int64_t stream_id;
-        std::shared_ptr<uv_udp_t> udp_handle;
         std::vector<uint8_t> data;
         size_t datalen;
         size_t nwrite;
