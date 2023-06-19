@@ -128,7 +128,7 @@ namespace oxen::quic
 
         conn.conn_buffer.resize(max_pkt_size);
         Path path;
-        ngtcp2_pkt_info pkt_info;
+        ngtcp2_pkt_info pkt_info{};
 
         auto written = ngtcp2_conn_write_connection_close(
                 conn, path, &pkt_info, u8data(conn.conn_buffer), conn.conn_buffer.size(), &err, get_timestamp());

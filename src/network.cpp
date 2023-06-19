@@ -102,7 +102,7 @@ namespace oxen::quic
         {
             if (nread > 0 || (nread == 0 && addr != nullptr))
             {
-                Packet pkt;
+                Packet pkt{};
                 pkt.data = {reinterpret_cast<const std::byte*>(buf_raw->base), static_cast<size_t>(nread)};
                 sockaddr_storage local_s_store;
                 sockaddr* local_s = reinterpret_cast<sockaddr*>(&local_s_store);
