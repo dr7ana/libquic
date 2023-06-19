@@ -275,15 +275,16 @@ namespace oxen::quic
     // OXEN_LIBQUIC_UDP_LIBUV_QUEUING -- does everything through udp_send, which involves setting up
     // packet queuing.  This is not the default because, in practice, it's slower than just sending
     // directly.
+    // CMake option: -DLIBQUIC_LIBUV_PACKET_QUEUE=ON
     //
-    // OXEN_LIBQUIC_UDP_NO_SENDMMSG -- when defined (and not using queuing, above) we always use libuv's
-    // try_send, even when on a platform (Linux, FreeBSD) that supports sendmmsg multi-packet sending.
-    // By default we use sendmmsg when available.
+    // OXEN_LIBQUIC_UDP_NO_SENDMMSG -- when defined (and not using queuing, above) we always use
+    // libuv's try_send, even when on a platform (Linux, FreeBSD) that supports sendmmsg
+    // multi-packet sending.  By default we use sendmmsg when available.
+    // CMake option: -DLIBQUIC_LIBUV_PACKET_QUEUE=OFF -DLIBQUIC_SENDMMSG=OFF
     //
-    // OXEN_LIBQUIC_UDP_NO_GSO -- if defined then don't use GSO (in favour of sendmmsg) when possible on
-    // Linux.
-    //
-    // (There are associated cmake options for properly setting these definitions).
+    // OXEN_LIBQUIC_UDP_NO_GSO -- if defined then don't use GSO (in
+    // favour of sendmmsg) when possible on Linux.
+    // CMake option: -DLIBQUIC_LIBUV_PACKET_QUEUE=OFF -DLIBQUIC_SENDMMSG=ON -DLIBQUIC_SEND_GSO=OFF
 
 #ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
     namespace
