@@ -52,8 +52,6 @@ namespace oxen::quic
 
         void call_async_all(async_callback_t async_cb);
 
-        void print_active_conns();
-
         std::list<std::pair<ConnectionID, Address>> get_conn_addrs();
 
         void close_conns();

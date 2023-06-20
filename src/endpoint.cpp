@@ -47,12 +47,6 @@ namespace oxen::quic
             c.second->io_trigger->on<uvw::async_event>(async_cb);
     }
 
-    void Endpoint::print_active_conns()
-    {
-        for (const auto& c : conns)
-            log::info(log_cat, "Conn ID: {}, Remote Address: {}", c.first, c.second->remote);
-    }
-
     std::list<std::pair<ConnectionID, Address>> Endpoint::get_conn_addrs()
     {
         std::list<std::pair<ConnectionID, Address>> ret{};
