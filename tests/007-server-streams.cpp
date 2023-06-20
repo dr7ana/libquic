@@ -11,10 +11,8 @@ namespace oxen::quic::test
         logger_config();
 
         Network test_net{};
-        auto client_msg = "hello from the other siiiii-iiiiide"_bsv;
-        auto client_response = "okay okay i get it already"_bsv;
-        auto server_msg = "hello from the other siiiii-iiiiide"_bsv;
-        auto server_response = "okay okay i get it already"_bsv;
+        auto msg = "hello from the other siiiii-iiiiide"_bsv;
+        auto response = "okay okay i get it already"_bsv;
 
         std::atomic<int> stream_check{0};
         std::atomic<int> data_check{0};
@@ -65,26 +63,26 @@ namespace oxen::quic::test
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             auto client_stream = client->open_stream();
             log::trace(log_cat, "Client sending stream message with native stream");
-            client_stream->send(client_msg);
+            client_stream->send(msg);
         });
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 
         std::thread server_thread([&]() {
             log::trace(log_cat, "Server sending stream message with extracted stream");
-            server_extracted_stream->send(server_response);
+            server_extracted_stream->send(response);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            auto strs = server->get_conns();
+            auto strs = server->get_conn_addrs();
             auto server_stream = server->open_stream(strs.front().first);
             log::trace(log_cat, "Server sending stream message with native stream");
-            server_stream->send(server_msg);
+            server_stream->send(msg);
         });
 
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
         std::thread client_extracted([&]() {
             log::trace(log_cat, "Client sending stream message with extracted stream");
-            client_extracted_stream->send(client_response);
+            client_extracted_stream->send(response);
         });
 
         std::this_thread::sleep_for(std::chrono::milliseconds(4000));

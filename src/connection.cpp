@@ -612,7 +612,12 @@ namespace oxen::quic
         else
         {
             auto client = stream->conn.client();
-            assert(client);
+
+            if (!client)
+            {
+                log::warning(log_cat, "Error: Local endpoint resolved as neither server nor client; failed to open stream");
+                return -1;
+            }
 
             log::debug(log_cat, "Client creating stream to match remote");
             stream->data_callback = client->context->stream_data_cb;
