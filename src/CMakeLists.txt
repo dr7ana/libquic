@@ -5,7 +5,11 @@ add_library(quic
     crypto.cpp
     endpoint.cpp
     network.cpp
+<<<<<<< HEAD
     opt.cpp
+=======
+    server.cpp
+>>>>>>> 94c2b33 (Refactor TLS credential and session handling)
     stream.cpp
     utils.cpp
 )

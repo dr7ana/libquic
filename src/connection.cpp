@@ -846,13 +846,9 @@ namespace oxen::quic
             	    &connptr, &dest_cid, &source_cid, path, NGTCP2_PROTO_VER_V1, &callbacks, &settings, &params, nullptr, this);
 		}
 
-        // set conn_ref fxn to return ngtcp2_crypto_conn_ref
-        tls_context->conn_ref.get_conn = get_conn;
-        // store pointer to connection in user_data
-        tls_context->conn_ref.user_data = this;
-
-        ngtcp2_conn_set_tls_native_handle(connptr, tls_context->session);
         conn.reset(connptr);
+
+        setup_tls_session(true);
 
         if (rv != 0)
         {

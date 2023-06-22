@@ -29,6 +29,7 @@ namespace oxen::quic
             explicit max_streams(int s) : stream_count(s) {}
         };
 
+<<<<<<< HEAD
         struct remote_tls : public GNUTLSCert
         {
             using GNUTLSCert::GNUTLSCert;
@@ -70,6 +71,8 @@ namespace oxen::quic
             return std::make_shared<GNUTLSContext>(*this);
         }
 
+=======
+>>>>>>> 94c2b33 (Refactor TLS credential and session handling)
     }  // namespace opt
 
 }  // namespace oxen::quic
