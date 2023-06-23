@@ -11,8 +11,9 @@ extern "C"
 #include <sys/socket.h>
 }
 
+#include <map>
 #include <fmt/core.h>
-
+#include <future>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -97,19 +98,12 @@ namespace oxen::quic
     using read_callback = std::function<void(uvw::loop* loop, uvw::timer_event* ev, int revents)>;
     using timer_callback = std::function<void(int nwrite, void* user_data)>;
     // Callbacks for client/server TLS connectivity and authentication
-    using server_tls_callback_t = std::function<int(
+	using session_tls_callback_t = std::function<int(
             gnutls_session_t session,
             unsigned int htype,
             unsigned int when,
             unsigned int incoming,
             const gnutls_datum_t* msg)>;
-    using client_tls_callback_t = std::function<int(
-            gnutls_session_t session,
-            unsigned int htype,
-            unsigned int when,
-            unsigned int incoming,
-            const gnutls_datum_t* msg)>;
-    // Callbacks for embedding in client/server UVW events (ex: listen events, data events, etc)
 
     // Stream callbacks
     using stream_data_callback_t = std::function<void(Stream&, bstring_view)>;
@@ -206,6 +200,11 @@ namespace oxen::quic
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         return numeric_host_family(hostname, AF_INET) || numeric_host_family(hostname, AF_INET6);
     }
+
+	enum Direction
+	{
+		OUTBOUND = 0, INBOUND = 1
+	};
 
     // Wrapper for ngtcp2_cid with helper functionalities to make it passable
     struct alignas(size_t) ConnectionID : ngtcp2_cid
@@ -503,10 +502,6 @@ namespace oxen::quic
     {
         return {reinterpret_cast<const CharOut*>(in.data()), in.size()};
     }
-
-    // Namespacing for named address arguments in API calls
-    namespace opt
-    {}  // namespace opt
 
     struct buffer_printer
     {

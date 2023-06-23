@@ -14,60 +14,67 @@ extern "C"
 #include <uvw.hpp>
 
 #include "connection.hpp"
-#include "handler.hpp"
 #include "internal.hpp"
 #include "utils.hpp"
 
 namespace oxen::quic
 {
-    Endpoint::Endpoint(std::shared_ptr<Handler>& quic_manager)
+    Endpoint::Endpoint(Network& n, Address& listen_addr, std::shared_ptr<uv_udp_t> hdl) :
+        net{n},
+        local{listen_addr},
+		handle{hdl}
     {
-        handler = quic_manager;
-
         expiry_timer = get_loop()->resource<uvw::timer_handle>();
         expiry_timer->on<uvw::timer_event>([this](const auto&, auto&) { check_timeouts(); });
         expiry_timer->start(250ms, 250ms);
 
-        log::info(log_cat, "Successfully created QUIC endpoint");
+        log::info(log_cat, "Successfully created QUIC endpoint listening on address: {}", local.to_string());
+    }
+
+    std::shared_ptr<uv_udp_t> Endpoint::get_handle()
+    {
+        return handle;
     }
 
     // Endpoint::~Endpoint()
     // {
     //     log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
     //     shutdown();
-
     //     if (expiry_timer)
     //         expiry_timer->close();
     // }
 
-    // adds async_cb to all connections; intended use is async shutdown of connections
-    void Endpoint::call_async_all(async_callback_t async_cb)
+    std::list<std::pair<ConnectionID, std::shared_ptr<connection_interface>>> Endpoint::get_all_inbounds()
     {
-        for (const auto& c : conns)
-            c.second->io_trigger->on<uvw::async_event>(async_cb);
+        std::list<std::pair<ConnectionID, std::shared_ptr<connection_interface>>> ret{};
+
+        for (const auto& c : inbound_conns)
+            ret.emplace_back(c.first, c.second.second);
+
+        return ret;
     }
 
-    std::list<std::pair<ConnectionID, Address>> Endpoint::get_conn_addrs()
+    std::list<std::pair<ConnectionID, std::shared_ptr<connection_interface>>> Endpoint::get_all_outbounds()
     {
-        std::list<std::pair<ConnectionID, Address>> ret{};
+        std::list<std::pair<ConnectionID, std::shared_ptr<connection_interface>>> ret{};
 
-        for (const auto& c : conns)
-            ret.emplace_back(c.first, c.second->remote);
+        for (const auto& c : outbound_conns)
+            ret.emplace_back(c.first, c.second.second);
 
         return ret;
     }
 
     void Endpoint::close_conns()
     {
-        for (const auto& c : conns)
-        {
-            close_connection(*c.second.get());
-        }
+        for (const auto& c : inbound_conns)
+            close_connection(*c.second.first.get());
+        for (const auto& c : outbound_conns)
+            close_connection(*c.second.first.get());
     }
 
     std::shared_ptr<uvw::loop> Endpoint::get_loop()
     {
-        return (handler->ev_loop) ? handler->ev_loop : nullptr;
+        return (net.ev_loop) ? net.loop() : nullptr;
     }
 
     void Endpoint::handle_packet(Packet& pkt)
@@ -84,7 +91,7 @@ namespace oxen::quic
 
         // check existing conns
         log::debug(log_cat, "Incoming connection ID: {}", *dcid.data);
-        auto cptr = get_conn(dcid);
+        auto cptr = get_conn_ptr(dcid);
 
         if (!cptr)
         {
@@ -166,22 +173,27 @@ namespace oxen::quic
 
     void Endpoint::delete_connection(const ConnectionID& cid)
     {
-        auto target = conns.find(cid);
-        if (target == conns.end())
-        {
-            log::warning(log_cat, "Error: could not delete connection [ID: {}]; could not find", *cid.data);
-            return;
-        }
+		auto delete_conn = [&](std::unordered_map<ConnectionID, conn_ptr_pair>& map){
+			if (auto itr = map.find(cid); itr != map.end())
+			{
+				auto conn_ptr = itr->second.first.get();
 
-        auto c_ptr = target->second.get();
+				if (conn_ptr->on_closing)
+				{
+					conn_ptr->on_closing(*conn_ptr);
+					conn_ptr->on_closing = nullptr;
+				}
 
-        if (c_ptr->on_closing)
-        {
-            c_ptr->on_closing(*c_ptr);
-            c_ptr->on_closing = nullptr;
-        }
+				map.erase(itr);
+				log::debug(log_cat, "Successfully deleted connection [ID: {}]", *cid.data);
+				return true;
+			}
+			return false;
+		};
 
-        conns.erase(target);
+		if (!delete_conn(inbound_conns))
+			if (!delete_conn(outbound_conns))
+				log::warning(log_cat, "Error: could not delete connection [ID: {}]; could not find", *cid.data);
     }
 
     std::optional<ConnectionID> Endpoint::handle_initial_packet(Packet& pkt)
@@ -212,6 +224,47 @@ namespace oxen::quic
 
         return std::make_optional<ConnectionID>(vid.dcid, vid.dcidlen);
     }
+
+	Connection* Endpoint::accept_initial_connection(Packet& pkt, ConnectionID& dcid)
+	{
+		log::info(log_cat, "Accepting new connection...");
+
+        ngtcp2_pkt_hd hdr;
+
+        auto rv = ngtcp2_accept(&hdr, u8data(pkt.data), pkt.data.size());
+
+        if (rv < 0)  // catches all other possible ngtcp2 errors
+        {
+            log::warning(
+                    log_cat,
+                    "Warning: unexpected packet received, length={}, code={}, continuing...",
+                    pkt.data.size(),
+                    ngtcp2_strerror(rv));
+            return nullptr;
+        }
+        if (hdr.type == NGTCP2_PKT_0RTT)
+        {
+            log::error(
+                    log_cat,
+                    "Error: 0RTT is currently not utilized in this implementation; dropping "
+                    "packet");
+            return nullptr;
+        }
+        if (hdr.type == NGTCP2_PKT_INITIAL && hdr.tokenlen)
+        {
+            log::warning(log_cat, "Warning: Unexpected token in initial packet");
+            return nullptr;
+        }
+
+
+        for (;;)
+        {
+            if (auto [itr, res] = inbound_conns.emplace(ConnectionID::random(), nullptr); res)
+            {
+				//
+            }
+        }
+	}
 
     void Endpoint::handle_conn_packet(Connection& conn, Packet& pkt)
     {
@@ -332,7 +385,6 @@ namespace oxen::quic
         uv_buf.base = packet_data->buf.data();
         uv_buf.len = bufsize;
 
-        auto handle = get_handle(p);
         assert(handle);
 
         auto rv = uv_udp_send(&packet_data->req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
@@ -373,7 +425,6 @@ namespace oxen::quic
         send_packet_libuv(p, buf, bufsize[0]);
 
 #else
-        auto handle = get_handle(p);
         assert(handle);
 
 #if defined(OXEN_LIBQUIC_UDP_SENDMMSG) || defined(OXEN_LIBQUIC_UDP_GSO)
@@ -589,8 +640,6 @@ namespace oxen::quic
     io_result Endpoint::send_packet(Path& p, bstring_view data)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        auto handle = get_handle(p);
-
         assert(handle);
 
         auto helper = new send_helper{};
@@ -639,34 +688,42 @@ namespace oxen::quic
     {
         auto now = get_timestamp();
 
-        while (!draining.empty() && draining.front().second < now)
-        {
-            if (auto it = conns.find(draining.front().first); it != conns.end())
-            {
-                log::debug(log_cat, "Deleting connection {}", *it->first.data);
-                conns.erase(it);
-            }
-            draining.pop();
-        }
+		auto check = [&](std::unordered_map<ConnectionID, conn_ptr_pair>& map){
+			while (!draining.empty() && draining.front().second < now)
+			{
+				if (auto itr = map.find(draining.front().first); itr != map.end())
+				{
+					log::debug(log_cat, "Deleting connection {}", *itr->first.data);
+					map.erase(itr);
+				}
+				draining.pop();
+			}
+		};
+
+		check(inbound_conns);
+		check(outbound_conns);
     }
 
-    Connection* Endpoint::get_conn(ConnectionID ID)
+    Connection* Endpoint::get_conn_ptr(ConnectionID ID)
     {
-        auto it = conns.find(ID);
+		if (auto ib_itr = inbound_conns.find(ID); ib_itr != inbound_conns.end())
+			return ib_itr->second.first.get();
 
-        if (it == conns.end())
-            return nullptr;
+		if (auto ob_itr = outbound_conns.find(ID); ob_itr != outbound_conns.end())
+			return ob_itr->second.first.get();
 
-        return it->second.get();
+        return nullptr;
     }
 
-    Connection* Endpoint::get_conn(const Address& addr)
+    Connection* Endpoint::get_conn_ptr(const Address& addr)
     {
-        for (const auto& c : conns)
-        {
-            if (c.second->remote == addr)
-                return c.second.get();
-        }
+        for (const auto& c : inbound_conns)
+            if (c.second.first->_remote == addr)
+                return c.second.first.get();
+
+        for (const auto& c : outbound_conns)
+            if (c.second.first->_remote == addr)
+                return c.second.first.get();
 
         return nullptr;
     }

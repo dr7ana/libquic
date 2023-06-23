@@ -1,14 +1,11 @@
 
 add_library(quic
-    client.cpp
     connection.cpp
     context.cpp
     crypto.cpp
     endpoint.cpp
-    handler.cpp
     network.cpp
     opt.cpp
-    server.cpp
     stream.cpp
     utils.cpp
 )

@@ -20,13 +20,69 @@ namespace oxen::quic
 {
     class Endpoint;
     class Stream;
-    class Server;
-    class Client;
-    class Handler;
+	class connection_interface;
 
-    class Connection
+    class Connection : public std::enable_shared_from_this<Connection>
     {
-      private:
+      protected:
+        friend class Network;
+		friend class Endpoint;
+		friend class connection_interface;
+
+		using conn_ptr_pair = std::pair<std::shared_ptr<Connection>, std::shared_ptr<connection_interface>>;
+
+		static conn_ptr_pair make_inbound_conn_pair(Endpoint& ep, 
+				const ConnectionID& scid,
+				const ConnectionID& dcid,
+				const Address& local,
+				const Address& remote,
+				const Path& path,
+				std::shared_ptr<uv_udp_t> handle,
+				std::shared_ptr<TLSContext> ctx,
+				config_t u_config)
+		{
+			return _make_conn_pair(ep, scid, dcid, local, remote, path, handle, ctx, u_config, INBOUND);
+		};
+
+		static conn_ptr_pair make_outbound_conn_pair(Endpoint& ep, 
+				const ConnectionID& scid,
+				const ConnectionID& dcid,
+				const Address& local,
+				const Address& remote,
+				const Path& path,
+				std::shared_ptr<uv_udp_t> handle,
+				std::shared_ptr<TLSContext> ctx,
+				config_t u_config)
+		{
+			return _make_conn_pair(ep, scid, dcid, local, remote, path, handle, ctx, u_config, OUTBOUND);
+		};
+
+        std::shared_ptr<Stream> _get_new_stream(
+                stream_data_callback_t data_cb = nullptr, stream_close_callback_t close_cb = nullptr);
+      
+	  private:
+
+        std::shared_ptr<uv_udp_t> udp_handle;
+        config_t user_config;
+		Direction direction;
+        Endpoint& _endpoint;
+        const ConnectionID source_cid;
+        ConnectionID dest_cid;
+        Path path;
+		const Address _local;
+        const Address _remote;
+
+		static conn_ptr_pair _make_conn_pair(Endpoint& ep, 
+				const ConnectionID& scid,
+				const ConnectionID& dcid,
+				const Address& local,
+				const Address& remote,
+				const Path& path,
+				std::shared_ptr<uv_udp_t> handle,
+				std::shared_ptr<TLSContext> ctx,
+				config_t u_config,
+				Direction dir);
+
         struct connection_deleter
         {
             inline void operator()(ngtcp2_conn* c) const { ngtcp2_conn_del(c); }
@@ -34,48 +90,36 @@ namespace oxen::quic
 
         int init(ngtcp2_settings& settings, ngtcp2_transport_params& params, ngtcp2_callbacks& callbacks);
 
-        std::shared_ptr<uv_udp_t> udp_handle;
-
-        config_t user_config;
-
         // underlying ngtcp2 connection object
         std::unique_ptr<ngtcp2_conn, connection_deleter> conn;
-
-      public:
-        // ngtcp2_crypto_conn_ref conn_ref;
         std::shared_ptr<TLSContext> tls_context;
-
-        Address local;
-        Address remote;
+        
+      public:
 
         std::shared_ptr<uvw::timer_handle> retransmit_timer;
 
-        // Create and establish a new connection from local client to remote server
-        //      ep: tunnel object managing this connection
-        //      scid: source/local ("primary") CID used for this connection (usually random)
-        //      path: network path to reach remote server
-        //      tunnel_port: destination port to tunnel to at remote end
-        Connection(
-                Client& client,
-                std::shared_ptr<Handler> ep,
-                const ConnectionID& scid,
-                const Path& path,
-                std::shared_ptr<uv_udp_t> handle,
-                config_t u_config);
-
-        // Construct and initialize a new incoming connection from remote client to local server
-        //      ep: tunnel objec tmanaging this connection
-        //      scid: local ("primary") CID usd for this connection (usually random)
-        //      header: packet header used to initialize connection
+        // Construct and initialize a new inbound/outbound connection to/from a remote
+        //      ep: owning endpoints
+        //      scid: local ("primary") CID used for this connection (random for outgoing)
+		//		dcid: remote CID used for this connection
+		//		local_addr: local address bound to udp handle
+		//		remote_addr: remote address we are communicating to
         //      path: network path used to reach remote client
-        Connection(
-                Server& server,
-                std::shared_ptr<Handler> ep,
-                const ConnectionID& scid,
-                ngtcp2_pkt_hd& hdr,
-                const Path& path,
-                std::shared_ptr<TLSContext> ctx,
-                config_t u_config);
+		//		handle: udp handle dedicated to local address
+		//		ctx: connection context
+		//		u_config: user configuration values passed in struct
+		//		tok: optional parameter for inbound connections to be passed to ngtcp2
+		Connection(Endpoint& ep, 
+				const ConnectionID& scid,
+				const ConnectionID& dcid,
+				const Address& local_addr,
+				const Address& remote_addr,
+				const Path& path,
+				std::shared_ptr<uv_udp_t> handle,
+				std::shared_ptr<TLSContext> ctx,
+				config_t u_config,
+				Direction dir,
+				const uint8_t* tok = nullptr);
 
         ~Connection();
 
@@ -86,8 +130,6 @@ namespace oxen::quic
         void check_pending_streams(
                 int available, stream_data_callback_t data_cb = nullptr, stream_close_callback_t close_cb = nullptr);
 
-        std::shared_ptr<Stream> get_new_stream(
-                stream_data_callback_t data_cb = nullptr, stream_close_callback_t close_cb = nullptr);
 
         void on_io_ready();
 
@@ -103,15 +145,9 @@ namespace oxen::quic
         size_t n_packets = 0;
         uint8_t* send_buffer_pos = send_buffer.data();
 
-        /// Returns a pointer to the owning Server, if this is a Server connection, nullptr
-        /// otherwise.
-        Server* server();
-        const Server* server() const;
-
-        /// Returns a pointer to the owning Client, if this is a Client connection, nullptr
-        /// otherwise.
-        Client* client();
-        const Client* client() const;
+        // Returns a pointer to the owning endpoint, else nullptr
+        Endpoint* endpoint();
+        const Endpoint* endpoint() const;
 
         void schedule_retransmit(uint64_t ts = 0);
 
@@ -131,16 +167,9 @@ namespace oxen::quic
         //  ex: initial transport params
         bstring conn_buffer;
 
-        std::shared_ptr<Handler> quic_manager;
-        Endpoint& endpoint;
-
-        const ConnectionID source_cid;
-        ConnectionID dest_cid;
-
         bool draining = false;
         bool closing = false;
 
-        Path path;
 
         // holds a mapping of active streams
         std::map<int64_t, std::shared_ptr<Stream>> streams;
@@ -163,6 +192,28 @@ namespace oxen::quic
         {
             return conn.get();
         }
+    };
+
+	class connection_interface
+    {
+      public:
+        explicit connection_interface(Endpoint& e, Connection& c_ref) : 
+				ep{e}, conn{c_ref.weak_from_this()}, scid{c_ref.source_cid}, dcid{c_ref.dest_cid} 
+		{ }
+
+		connection_interface(const connection_interface& obj) :
+				ep{obj.ep}, conn{obj.conn}, scid{obj.scid}, dcid{obj.dcid} 
+		{}
+
+
+		std::shared_ptr<Stream> get_new_stream(
+                stream_data_callback_t data_cb = nullptr, stream_close_callback_t close_cb = nullptr);
+
+      private:
+		Endpoint& ep;
+		const ConnectionID scid;
+		const ConnectionID dcid;
+        std::weak_ptr<Connection> conn;
     };
 
     extern "C"

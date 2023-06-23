@@ -20,52 +20,85 @@ extern "C"
 #include <unordered_map>
 #include <uvw.hpp>
 
+#include "network.hpp"
 #include "connection.hpp"
 #include "context.hpp"
 #include "utils.hpp"
 
 namespace oxen::quic
 {
-    class Connection;
-    class Handler;
+	using conn_ptr_pair = std::pair<std::shared_ptr<Connection>, std::shared_ptr<connection_interface>>;
 
-    class Endpoint
+    class Endpoint : std::enable_shared_from_this<Endpoint>
     {
         friend class Connection;
+		friend class Stream;
+
+      private:
+		const Address local;
+        std::shared_ptr<uvw::timer_handle> expiry_timer;
+		std::shared_ptr<SessionBase> ep_session;
+        std::shared_ptr<uv_udp_t> handle;
+        Network& net;
 
       public:
-        explicit Endpoint(std::shared_ptr<Handler>& quic_manager);
-        virtual ~Endpoint() { log::trace(log_cat, "{} called", __PRETTY_FUNCTION__); }
+        explicit Endpoint(Network& n, Address& listen_addr, std::shared_ptr<uv_udp_t> hdl);
 
-        std::shared_ptr<Handler> handler;
+        // creates new outbound connection to remote; emplaces conn/interface pair in outbound map
+		template <typename... Opt>
+        std::shared_ptr<connection_interface> connect(const Address& remote, Opt&&... opts)
+		{
+			std::promise<std::shared_ptr<connection_interface>> p;
+			auto f = p.get_future();
+
+			net.call([&opts..., &p, this]() mutable {
+				try
+				{
+					// initialize client context and client tls context simultaneously
+					std::shared_ptr<SessionBase> session_base =
+							std::make_shared<SessionBase>(std::forward<Opt>(opts)...);
+
+					quic_manager->clients.emplace_back(std::move(client_ctx));
+					log::trace(log_cat, "Client context emplaced");
+
+					p.set_value(client_ptr);
+				}
+				catch (...)
+				{
+					p.set_exception(std::current_exception());
+				}
+			});
+
+			return f.get();
+		};
 
         std::shared_ptr<uvw::loop> get_loop();
 
-        void handle_packet(Packet& pkt);
+        Connection* get_conn_ptr(ConnectionID ID);		// query by conn ID
+        Connection* get_conn_ptr(const Address& addr);	// query by remote addr
+
+		// query a list of all active inbound and outbound connections paired with a conn_interface
+        std::list<std::pair<ConnectionID, std::shared_ptr<connection_interface>>> get_all_inbounds();
+		std::list<std::pair<ConnectionID, std::shared_ptr<connection_interface>>> get_all_outbounds();
+
+		std::pair<ConnectionID, std::shared_ptr<connection_interface>> get_inbound_conn();
+		std::pair<ConnectionID, std::shared_ptr<connection_interface>> get_outbound_conn();
+
+        std::shared_ptr<uv_udp_t> get_handle();
+        
+		void handle_packet(Packet& pkt);
+
+      protected:
 
         void close_connection(Connection& conn, int code = NGTCP2_NO_ERROR, std::string_view msg = "NO_ERROR"sv);
 
         void delete_connection(const ConnectionID& cid);
-
-        Connection* get_conn(ConnectionID ID);
-        Connection* get_conn(const Address& addr);
-
-        void call_async_all(async_callback_t async_cb);
-
-        std::list<std::pair<ConnectionID, Address>> get_conn_addrs();
-
-        void close_conns();
-
-        virtual std::shared_ptr<uv_udp_t> get_handle(Address& addr) = 0;
-
-        virtual std::shared_ptr<uv_udp_t> get_handle(Path& p) = 0;
-
-      protected:
-        std::shared_ptr<uvw::timer_handle> expiry_timer;
+        
+		void close_conns();
 
         // Data structures used to keep track of various types of connections
         //
-        // conns:
+        // {inbound,outbound}_conns:
         //      When a client establishes a new connection, it provides its own source CID (scid)
         //      and destination CID (dcid), which it sends to the server. The primary Connection
         //      instance is stored as a shared_ptr indexd by scid
@@ -87,8 +120,9 @@ namespace oxen::quic
         //      a short period of time allowing any lagging packets to be caught
         //
         //      They are indexed by connection ID, storing the removal time as a uint64_t value
-        //
-        std::unordered_map<ConnectionID, std::unique_ptr<Connection>> conns;
+        std::unordered_map<ConnectionID, conn_ptr_pair> inbound_conns;
+        std::unordered_map<ConnectionID, conn_ptr_pair> outbound_conns;
+
         std::queue<std::pair<ConnectionID, uint64_t>> draining;
 
         std::optional<ConnectionID> handle_initial_packet(Packet& pkt);
@@ -109,27 +143,10 @@ namespace oxen::quic
         // Accepts new connection, returning either a ptr to the Connection
         // object or nullptr if error. Virtual function returns nothing --
         // overrided by Client and Server classes
-        virtual Connection* accept_initial_connection(Packet& pkt, ConnectionID& dcid) = 0;
+        Connection* accept_initial_connection(Packet& pkt, ConnectionID& dcid);
 
-        // NOTE: this may not be necessary for a generalizable quic library,
-        //      as it is a lokinet-specific implementation. However, it may be
-        //      useful in the future to be able to add our own headers to quic
-        //      packets for whatever purpose
-        //
-        // Writes packet header to the beginning of this.buf; this header is
-        // prepended to quic packets to handle quic server routing, consists of:
-        // - type [1 byte]: 1 for client->server packets; 2 for server->client packets
-        //      (other values reserved)
-        // - port [2 bytes, network order]: client pseudoport (i.e. either a source or
-        //      destination port depending on type)
-        // - ecn value [1 byte]: provided by ngtcp2 (Only the lower 2 bits are actually used).
-        //
-        // \param psuedo_port - the remote's pseudo-port (will be 0 if the remote is a
-        //      server, > 0 for a client remote)
-        // \param ecn - the ecn value from ngtcp2
-        //
-        // Returns the number of bytes written to buf
-        virtual size_t write_packet_header(uint16_t pseudo_port, uint8_t ecn) { return 0; }
+	  private:
+	  	//
     };
 
 }  // namespace oxen::quic

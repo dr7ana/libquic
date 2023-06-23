@@ -104,8 +104,8 @@ namespace oxen::quic
         datum local_cert{};
         datum remote_cert{};  // if client, this is server cert and vice versa
         datum remote_ca{};    // if client, this is server CA and vice versa
-        server_tls_callback_t server_tls_cb;
-        client_tls_callback_t client_tls_cb;
+        session_tls_callback_t inbound_tls_cb;
+        session_tls_callback_t outbound_tls_cb;
         gnutls_certificate_credentials_t cred;
         context_init_scheme scheme;
 
@@ -160,8 +160,7 @@ namespace oxen::quic
 
         gnutls_priority_t priority;
         gnutls_x509_crt_int* cert;
-        server_tls_callback_t server_tls_cb;
-        client_tls_callback_t client_tls_cb;
+        session_tls_callback_t session_tls_cb;
         GNUTLSCert gcert;
 
         void client_callback_init();

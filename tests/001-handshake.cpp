@@ -16,7 +16,7 @@ namespace oxen::quic::test
 
         std::atomic<bool> good{false};
 
-        client_tls_callback_t client_tls_cb = [&](gnutls_session_t session,
+        session_tls_callback_t client_tls_cb = [&](gnutls_session_t session,
                                                   unsigned int htype,
                                                   unsigned int when,
                                                   unsigned int incoming,

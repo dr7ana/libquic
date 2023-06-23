@@ -56,7 +56,7 @@ namespace oxen::quic
                     std::string client_cert,
                     std::string server_cert = "",
                     std::string server_ca = "",
-                    client_tls_callback_t client_cb = nullptr);
+                    session_tls_callback_t client_cb = nullptr);
             std::shared_ptr<TLSContext> into_context() &&;
         };
 
