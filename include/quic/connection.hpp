@@ -34,27 +34,26 @@ namespace oxen::quic
 		static conn_ptr_pair make_inbound_conn_pair(Endpoint& ep, 
 				const ConnectionID& scid,
 				const ConnectionID& dcid,
-				const Address& local,
-				const Address& remote,
 				const Path& path,
 				std::shared_ptr<uv_udp_t> handle,
-				std::shared_ptr<TLSContext> ctx,
-				config_t u_config)
+				std::shared_ptr<TLSCreds> creds,
+				config_t u_config,
+				ngtcp2_pkt_hd* hdr)
 		{
-			return _make_conn_pair(ep, scid, dcid, local, remote, path, handle, ctx, u_config, INBOUND);
+			log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+			return _make_conn_pair(ep, scid, dcid, path, handle, std::move(creds), u_config, INBOUND, hdr);
 		};
 
 		static conn_ptr_pair make_outbound_conn_pair(Endpoint& ep, 
 				const ConnectionID& scid,
 				const ConnectionID& dcid,
-				const Address& local,
-				const Address& remote,
 				const Path& path,
 				std::shared_ptr<uv_udp_t> handle,
-				std::shared_ptr<TLSContext> ctx,
+				std::shared_ptr<TLSCreds> creds,
 				config_t u_config)
 		{
-			return _make_conn_pair(ep, scid, dcid, local, remote, path, handle, ctx, u_config, OUTBOUND);
+			log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+			return _make_conn_pair(ep, scid, dcid, path, handle, std::move(creds), u_config, OUTBOUND);
 		};
 
         std::shared_ptr<Stream> _get_new_stream(
@@ -75,13 +74,12 @@ namespace oxen::quic
 		static conn_ptr_pair _make_conn_pair(Endpoint& ep, 
 				const ConnectionID& scid,
 				const ConnectionID& dcid,
-				const Address& local,
-				const Address& remote,
 				const Path& path,
 				std::shared_ptr<uv_udp_t> handle,
-				std::shared_ptr<TLSContext> ctx,
+				std::shared_ptr<TLSCreds> creds,
 				config_t u_config,
-				Direction dir);
+				Direction dir,
+				ngtcp2_pkt_hd* hdr = nullptr);
 
         struct connection_deleter
         {
@@ -118,22 +116,12 @@ namespace oxen::quic
 		Connection(Endpoint& ep, 
 				const ConnectionID& scid,
 				const ConnectionID& dcid,
-				const Address& local_addr,
-				const Address& remote_addr,
 				const Path& path,
 				std::shared_ptr<uv_udp_t> handle,
-				std::shared_ptr<TLSContext> ctx,
+				std::shared_ptr<TLSCreds> creds,
 				config_t u_config,
 				Direction dir,
-				const uint8_t* tok = nullptr);
-        Connection(
-                Server& server,
-                std::shared_ptr<Handler> ep,
-                const ConnectionID& scid,
-                ngtcp2_pkt_hd& hdr,
-                const Path& path,
-                std::shared_ptr<TLSCreds> creds,
-                config_t u_config);
+				ngtcp2_pkt_hd* hdr = nullptr);
 
         ~Connection();
 
@@ -213,7 +201,9 @@ namespace oxen::quic
       public:
         explicit connection_interface(Endpoint& e, Connection& c_ref) : 
 				ep{e}, conn{c_ref.weak_from_this()}, scid{c_ref.source_cid}, dcid{c_ref.dest_cid} 
-		{ }
+		{ 
+			log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+		}
 
 		connection_interface(const connection_interface& obj) :
 				ep{obj.ep}, conn{obj.conn}, scid{obj.scid}, dcid{obj.dcid} 

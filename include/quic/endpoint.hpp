@@ -31,18 +31,47 @@ namespace oxen::quic
 
     class Endpoint : std::enable_shared_from_this<Endpoint>
     {
+		friend class Network;
         friend class Connection;
 		friend class Stream;
 
       private:
 		const Address local;
         std::shared_ptr<uvw::timer_handle> expiry_timer;
-		std::shared_ptr<SessionBase> ep_session;
         std::shared_ptr<uv_udp_t> handle;
+		config_t user_config{};
+		bool accepting_inbound{false};
         Network& net;
 
       public:
-        explicit Endpoint(Network& n, Address& listen_addr, std::shared_ptr<uv_udp_t> hdl);
+        explicit Endpoint(Network& n, const Address& listen_addr);
+
+		template <typename... Opt>
+		bool inbound_init(Opt&&... opts)
+		{
+			std::promise<bool> p;
+			auto f = p.get_future();
+
+			net.call([&opts..., &p, this]() mutable {
+				try
+				{
+					// initialize client context and client tls context simultaneously
+					inbound_ctx = std::make_shared<InboundContext>(std::forward<Opt>(opts)...);
+					accepting_inbound = true;
+
+					log::debug(log_cat, "Inbound context ready for incoming connections");
+
+					p.set_value(true);
+				}
+				catch (...)
+				{
+					p.set_exception(std::current_exception());
+				}
+			});
+
+			return f.get();
+		}
+
 
         // creates new outbound connection to remote; emplaces conn/interface pair in outbound map
 		template <typename... Opt>
@@ -51,17 +80,29 @@ namespace oxen::quic
 			std::promise<std::shared_ptr<connection_interface>> p;
 			auto f = p.get_future();
 
-			net.call([&opts..., &p, this]() mutable {
+			net.call([&opts..., &p, this, raddr = remote]() mutable {
 				try
 				{
 					// initialize client context and client tls context simultaneously
-					std::shared_ptr<SessionBase> session_base =
-							std::make_shared<SessionBase>(std::forward<Opt>(opts)...);
+					outbound_ctx = std::make_shared<OutboundContext>(std::forward<Opt>(opts)...);
 
-					quic_manager->clients.emplace_back(std::move(client_ctx));
-					log::trace(log_cat, "Client context emplaced");
+					if (auto [itr, res] = outbound_conns.emplace(std::piecewise_construct,
+						std::forward_as_tuple(ConnectionID::random()), std::forward_as_tuple(nullptr, nullptr)); res)
+					{
+						itr->second = std::move(Connection::make_outbound_conn_pair(
+							*this,
+							itr->first,
+							ConnectionID::random(),
+							Path{local, raddr},
+							handle,
+							outbound_ctx->tls_creds,
+							user_config
+						));
 
-					p.set_value(client_ptr);
+						p.set_value(itr->second.second);
+					}
+					else
+						p.set_value(nullptr);
 				}
 				catch (...)
 				{
@@ -89,6 +130,10 @@ namespace oxen::quic
 		void handle_packet(Packet& pkt);
 
       protected:
+
+	  	std::shared_ptr<ContextBase> outbound_ctx = nullptr;
+	  	std::shared_ptr<ContextBase> inbound_ctx = nullptr;
+
 
         void close_connection(Connection& conn, int code = NGTCP2_NO_ERROR, std::string_view msg = "NO_ERROR"sv);
 

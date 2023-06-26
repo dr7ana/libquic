@@ -29,10 +29,11 @@ namespace oxen::quic
 
       public:
         Stream(Connection& conn,
-               stream_data_callback_t data_cb = nullptr,
-               stream_close_callback_t close_cb = nullptr,
-               int64_t stream_id = -1);
-        Stream(Connection& conn, int64_t stream_id);
+				Endpoint& ep,
+               	stream_data_callback_t data_cb = nullptr,
+               	stream_close_callback_t close_cb = nullptr,
+               	int64_t stream_id = -1);
+        Stream(Connection& conn, Endpoint& ep, int64_t stream_id);
         ~Stream();
 
         stream_data_callback_t data_callback;
@@ -253,6 +254,6 @@ namespace oxen::quic
         bool sent_fin{false};
         bool ready{false};
 
-        std::weak_ptr<Endpoint> ep;
+        Endpoint& endpoint;
     };
 }  // namespace oxen::quic

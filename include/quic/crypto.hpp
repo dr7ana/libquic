@@ -115,6 +115,7 @@ namespace oxen::quic
 
       public:
         virtual void* get_session() = 0;
+		virtual ~TLSSession() { log::trace(log_cat, "{} called", __PRETTY_FUNCTION__); }
     };
 
     class GNUTLSSession : public TLSSession
@@ -125,7 +126,7 @@ namespace oxen::quic
         const GNUTLSCreds& creds;
         bool is_client;
 
-        void set_tls_hook_functions();  // TODO: which and when?
+        void set_tls_hook_functions();  // TODO: which and when? i dunno tom ask your mom
       public:
         GNUTLSSession(GNUTLSCreds& creds, const ngtcp2_crypto_conn_ref& conn_ref_, bool is_client);
         ~GNUTLSSession();

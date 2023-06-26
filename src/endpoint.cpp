@@ -19,14 +19,15 @@ extern "C"
 
 namespace oxen::quic
 {
-    Endpoint::Endpoint(Network& n, Address& listen_addr, std::shared_ptr<uv_udp_t> hdl) :
+    Endpoint::Endpoint(Network& n, const Address& listen_addr) :
         net{n},
-        local{listen_addr},
-		handle{hdl}
+        local{listen_addr}
     {
         expiry_timer = get_loop()->resource<uvw::timer_handle>();
         expiry_timer->on<uvw::timer_event>([this](const auto&, auto&) { check_timeouts(); });
         expiry_timer->start(250ms, 250ms);
+
+		handle = net.map_udp_handle(listen_addr, *this);
 
         log::info(log_cat, "Successfully created QUIC endpoint listening on address: {}", local.to_string());
     }
@@ -190,7 +191,7 @@ namespace oxen::quic
 			}
 			return false;
 		};
-
+		
 		if (!delete_conn(inbound_conns))
 			if (!delete_conn(outbound_conns))
 				log::warning(log_cat, "Error: could not delete connection [ID: {}]; could not find", *cid.data);
@@ -257,14 +258,35 @@ namespace oxen::quic
         }
 
 
-        for (;;)
-        {
-            if (auto [itr, res] = inbound_conns.emplace(ConnectionID::random(), nullptr); res)
-            {
-				//
-            }
-        }
-	}
+		for (;;)
+		{
+			if (auto [itr, res] = inbound_conns.emplace(std::piecewise_construct,
+					std::forward_as_tuple(ConnectionID::random()), std::forward_as_tuple(nullptr, nullptr)); res)
+			{
+				std::promise<Connection*> p;
+				auto f = p.get_future();
+
+				net.call([this, pkt, &p, &hdr, it = itr](){
+					it->second = std::move(Connection::make_inbound_conn_pair(
+						*this,
+						it->first,
+						hdr.scid,
+						pkt.path,
+						handle,
+						inbound_ctx->tls_creds,
+						user_config,
+						&hdr
+					));
+
+					p.set_value(it->second.first.get());
+					return;
+				});
+				
+				return f.get();
+			}
+
+		};			
+	};
 
     void Endpoint::handle_conn_packet(Connection& conn, Packet& pkt)
     {
@@ -704,6 +726,7 @@ namespace oxen::quic
 		check(outbound_conns);
     }
 
+	// note: this can be optimized
     Connection* Endpoint::get_conn_ptr(ConnectionID ID)
     {
 		if (auto ib_itr = inbound_conns.find(ID); ib_itr != inbound_conns.end())
@@ -712,6 +735,7 @@ namespace oxen::quic
 		if (auto ob_itr = outbound_conns.find(ID); ob_itr != outbound_conns.end())
 			return ob_itr->second.first.get();
 
+		log::debug(log_cat, "Could not find conn ID: {}, returning nullptr...", ID.to_string());
         return nullptr;
     }
 

@@ -15,8 +15,8 @@ extern "C"
 
 namespace oxen::quic
 {
-    Stream::Stream(Connection& conn, stream_data_callback_t data_cb, stream_close_callback_t close_cb, int64_t stream_id) :
-            conn{conn}, stream_id{stream_id}, data_callback{data_cb}
+    Stream::Stream(Connection& conn, Endpoint& _ep, stream_data_callback_t data_cb, stream_close_callback_t close_cb, int64_t stream_id) :
+            conn{conn}, endpoint{_ep}, stream_id{stream_id}, data_callback{data_cb}
     {
         log::trace(log_cat, "Creating Stream object...");
 
@@ -27,7 +27,7 @@ namespace oxen::quic
         log::trace(log_cat, "Stream object created");
     }
 
-    Stream::Stream(Connection& conn, int64_t stream_id) : Stream{conn, nullptr, nullptr, stream_id} {}
+    Stream::Stream(Connection& conn, Endpoint& ep, int64_t stream_id) : Stream{conn, ep, nullptr, nullptr, stream_id} {}
 
     Stream::~Stream()
     {
@@ -47,29 +47,24 @@ namespace oxen::quic
 
     void Stream::close(uint64_t error_code)
     {
-		if (auto endpoint = ep.lock())
-		{
-			endpoint->net.call([this, error_code]() {
-				log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+		endpoint.net.call([this, error_code]() {
+			log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-				if (is_shutdown)
-					log::info(log_cat, "Stream is already shutting down");
-				else if (is_closing)
-					log::debug(log_cat, "Stream is already closing");
-				else
-				{
-					is_closing = is_shutdown = true;
-					log::info(log_cat, "Closing stream (ID: {}) with error code {}", stream_id, ngtcp2_strerror(error_code));
-					ngtcp2_conn_shutdown_stream(conn, 0, stream_id, error_code);
-				}
-				if (is_shutdown)
-					data_callback = nullptr;
+			if (is_shutdown)
+				log::info(log_cat, "Stream is already shutting down");
+			else if (is_closing)
+				log::debug(log_cat, "Stream is already closing");
+			else
+			{
+				is_closing = is_shutdown = true;
+				log::info(log_cat, "Closing stream (ID: {}) with error code {}", stream_id, ngtcp2_strerror(error_code));
+				ngtcp2_conn_shutdown_stream(conn, 0, stream_id, error_code);
+			}
+			if (is_shutdown)
+				data_callback = nullptr;
 
-				conn.io_ready();
-			});
-		}
-		else
-			log::error(log_cat, "Stream [ID: {}] unable to query endpoint for 'close' call", stream_id);
+			conn.io_ready();
+		});
     }
 
     void Stream::append_buffer(bstring_view buffer, std::shared_ptr<void> keep_alive)
@@ -155,14 +150,9 @@ namespace oxen::quic
 
     void Stream::send(bstring_view data, std::shared_ptr<void> keep_alive)
     {
-		if (auto endpoint = ep.lock())
-		{
-			endpoint->net.call([this, data, keep_alive]() {
-				log::trace(log_cat, "Stream (ID: {}) sending message: {}", stream_id, buffer_printer{data});
-				append_buffer(data, keep_alive);
-			});
-		}
-		else
-			log::critical(log_cat, "Stream [ID: {}] unable to query endpoint for 'send' call", stream_id);
+		endpoint.net.call([this, data, keep_alive]() {
+			log::trace(log_cat, "Stream (ID: {}) sending message: {}", stream_id, buffer_printer{data});
+			append_buffer(data, keep_alive);
+		});
     }
 }  // namespace oxen::quic

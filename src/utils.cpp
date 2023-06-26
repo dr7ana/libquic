@@ -98,7 +98,7 @@ namespace oxen::quic
             return "[{}]:{}"_format(buf, port());
         }
         uv_ip4_name(*this, buf, sizeof(buf));
-        return "{}:{}"_format(buf, port());
+        return "{}:{}"_format(buf, port_horder());
     }
 
     std::string Path::to_string() const

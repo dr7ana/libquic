@@ -14,16 +14,6 @@
 
 namespace oxen::quic
 {
-	std::shared_ptr<Network> network_init(std::shared_ptr<uvw::loop> loop_ptr, std::thread::id thread_id)
-	{
-		return std::make_shared<Network>(loop_ptr, thread_id);
-	}
-
-	std::shared_ptr<Network> network_init()
-	{
-		return std::make_shared<Network>();
-	}
-
     Network::Network(std::shared_ptr<uvw::loop> loop_ptr, std::thread::id thread_id) : 
         ev_loop{loop_ptr},
         loop_thread_id{thread_id}
@@ -68,11 +58,14 @@ namespace oxen::quic
 
 	std::shared_ptr<Endpoint> Network::endpoint(const Address &local_addr)
 	{
-		std::shared_ptr<uv_udp_t> new_handle = map_udp_handle(local_addr);
+		return endpoint(const_cast<Address&>(local_addr));
+	}
 
-		auto ep = std::make_shared<Endpoint>(*this, local_addr, new_handle);
+	std::shared_ptr<Endpoint> Network::endpoint(Address &local_addr)
+	{
+		auto ep = std::make_shared<Endpoint>(*this, local_addr);
 
-		endpoint_map[local_addr] = ep;
+		endpoint_map.emplace(local_addr, ep);
 
 		return ep;
 	}
@@ -134,7 +127,7 @@ namespace oxen::quic
     {
         struct udp_data
         {
-            Network& net;
+            Endpoint& ep;
             char buf[
 #if !defined(OXEN_LIBQUIC_UDP_NO_RECVMMSG) && (defined(__linux__) || defined(__FreeBSD__))
                     max_bufsize * 8
@@ -170,7 +163,7 @@ namespace oxen::quic
                 pkt.path.remote = addr;
 
                 auto& data = *static_cast<udp_data*>(handle->data);
-                auto& net = data.net;
+                auto& endpoint = data.ep;
 
                 log::trace(
                         log_cat,
@@ -178,17 +171,8 @@ namespace oxen::quic
                         pkt.path.remote,
                         pkt.data.size(),
                         buffer_printer{pkt.data});
-                log::trace(
-                        log_cat,
-                        "Searching endpoint mapping for local address {}",
-                        pkt.path.local);
 
-                Endpoint* endpoint = net.get_endpoint(pkt.path.local);
-
-                if (endpoint)
-                    endpoint->handle_packet(pkt);
-                else
-                    log::warning(log_cat, "Warning: packet handling unsuccessful for local {}", pkt.path.local);
+				endpoint.handle_packet(pkt);
             }
             else if (nread == 0)
             {
@@ -201,20 +185,20 @@ namespace oxen::quic
         }
     }  // namespace
 
-    std::shared_ptr<uv_udp_t> Network::start_udp_handle(uv_loop_t* loop, const Address& bind)
+    std::shared_ptr<uv_udp_t> Network::start_udp_handle(uv_loop_t* loop, const Address& bind, Endpoint& ep)
     {
         log::info(log_cat, "Starting new UDP handle on {}", bind);
         std::shared_ptr<uv_udp_t> udp{new uv_udp_t{}, [](uv_udp_t* udp) {
-                                          auto* handle = reinterpret_cast<uv_handle_t*>(udp);
-                                          if (uv_is_active(handle))
-                                              uv_udp_recv_stop(udp);
-                                          uv_close(handle, [](uv_handle_t* handle) {
-                                              auto* udp = reinterpret_cast<uv_udp_t*>(handle);
-                                              if (udp->data != nullptr)
-                                                  delete static_cast<udp_data*>(udp->data);
-                                              delete udp;
-                                          });
-                                      }};
+				auto* handle = reinterpret_cast<uv_handle_t*>(udp);
+				if (uv_is_active(handle))
+					uv_udp_recv_stop(udp);
+				uv_close(handle, [](uv_handle_t* handle) {
+					auto* udp = reinterpret_cast<uv_udp_t*>(handle);
+					if (udp->data != nullptr)
+						delete static_cast<udp_data*>(udp->data);
+					delete udp;
+				});
+			}};
 
         uv_udp_init_ex(
                 loop,
@@ -226,7 +210,7 @@ namespace oxen::quic
 #endif
         );
 
-        udp->data = new udp_data{*this};
+        udp->data = new udp_data{ep};
         // binding is done here rather than after returning, so an already bound
         // uv_udp_t isn't bound to the same address twice
         int rv = uv_udp_bind(udp.get(), bind, 0);
@@ -242,15 +226,15 @@ namespace oxen::quic
         return udp;
     }
 
-    std::shared_ptr<uv_udp_t> Network::map_udp_handle(const Address& local)
+    std::shared_ptr<uv_udp_t> Network::map_udp_handle(const Address& local, Endpoint& ep)
     {
-        auto& udp = handle_map[local];
+		if (auto itr = handle_map.find(const_cast<Address&>(local)); itr != handle_map.end())
+			return itr->second;
 
-        if (!udp)
-        {
-            log::trace(log_cat, "Creating dedicated uv_udp_t handle listening on {}...", local);
-            udp = start_udp_handle(loop()->raw(), local);
-        }
+		log::trace(log_cat, "Creating dedicated uv_udp_t handle listening on {}...", local);
+
+		auto udp = start_udp_handle(loop()->raw(), local, ep);
+		handle_map[const_cast<Address&>(local)] = udp;
 
         return udp;
     }

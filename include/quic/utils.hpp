@@ -283,32 +283,39 @@ namespace oxen::quic
             return *this;
         }
 
-        bool is_ipv4() const
+        inline bool is_ipv4() const
         {
             return _addr.addrlen == sizeof(sockaddr_in) &&
                    reinterpret_cast<const sockaddr_in&>(_sock_addr).sin_family == AF_INET;
         }
-        bool is_ipv6() const
+        inline bool is_ipv6() const
         {
             return _addr.addrlen == sizeof(sockaddr_in6) &&
                    reinterpret_cast<const sockaddr_in6&>(_sock_addr).sin6_family == AF_INET6;
         }
 
         // Accesses the sockaddr_in for this address.  Precondition: `is_ipv4()`
-        const sockaddr_in& in4() const
+        inline const sockaddr_in& in4() const
         {
             assert(is_ipv4());
             return reinterpret_cast<const sockaddr_in&>(_sock_addr);
         }
 
         // Accesses the sockaddr_in6 for this address.  Precondition: `is_ipv6()`
-        const sockaddr_in6& in6() const
+        inline const sockaddr_in6& in6() const
         {
             assert(is_ipv6());
             return reinterpret_cast<const sockaddr_in6&>(_sock_addr);
         }
 
-        uint16_t port() const
+		inline uint16_t port_horder() const
+        {
+            assert(is_ipv4() || is_ipv6());
+            return is_ipv4() ? ntohs(reinterpret_cast<const sockaddr_in&>(_sock_addr).sin_port)
+                             : reinterpret_cast<const sockaddr_in6&>(_sock_addr).sin6_port;
+        }
+
+        inline uint16_t port() const
         {
             assert(is_ipv4() || is_ipv6());
             return is_ipv4() ? reinterpret_cast<const sockaddr_in&>(_sock_addr).sin_port
@@ -376,6 +383,16 @@ namespace oxen::quic
     };
     template <>
     inline constexpr bool IsToStringFormattable<Address> = true;
+
+	struct addr_comparator
+	{
+		using is_transparent = std::true_type;
+
+		inline bool operator()(const Address& lhs, const Address& rhs) const
+		{
+			return lhs.to_string() < rhs.to_string();
+		}
+	};
 
     // Wrapper for ngtcp2_path with remote/local components. Implicitly convertible
     // to ngtcp2_path*
