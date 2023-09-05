@@ -8,6 +8,9 @@ extern "C"
 
 #include <stdexcept>
 
+#include <oxenc/hex.h>
+#include <oxenc/base64.h>
+
 #include "connection.hpp"
 #include "context.hpp"
 #include "endpoint.hpp"
@@ -49,7 +52,7 @@ namespace oxen::quic
 
         if (auto rv = gnutls_certificate_allocate_credentials(&cred); rv < 0)
         {
-            log::warning(log_cat, "Server gnutls_certificate_allocate_credentials failed: {}", gnutls_strerror(rv));
+            log::warning(log_cat, "gnutls_certificate_allocate_credentials failed: {}", gnutls_strerror(rv));
             throw std::runtime_error("gnutls credential allocation failed");
         }
 
@@ -78,6 +81,52 @@ namespace oxen::quic
         log::info(log_cat, "Completed credential initialization");
     }
 
+    GNUTLSCreds::GNUTLSCreds(std::string ed_seed, std::string ed_pubkey)
+    {
+        log::trace(log_cat, "Initializing GNUTLSCreds from Ed25519 keypair");
+
+        // These bytes mean "this is a raw Ed25519 private key" in ASN.1 (or something like that)
+        auto asn_seed_bytes = oxenc::from_hex("302e020100300506032b657004220420");
+        asn_seed_bytes += ed_seed;
+
+        std::string seed_pem = "-----BEGIN PRIVATE KEY-----\n";
+        seed_pem += oxenc::to_base64(asn_seed_bytes);
+        seed_pem += "\n-----END PRIVATE KEY-----\n";
+
+        // These bytes mean "this is a raw Ed25519 public key" in ASN.1 (or something like that)
+        auto asn_pubkey_bytes = oxenc::from_hex("302a300506032b6570032100");
+        asn_pubkey_bytes += ed_pubkey;
+
+        std::string pubkey_pem = "-----BEGIN PUBLIC KEY-----\n";
+        pubkey_pem += oxenc::to_base64(asn_pubkey_bytes);
+        pubkey_pem += "\n-----END PUBLIC KEY-----\n";
+
+        //FIXME TODO XXX: debug printing of keys, delete this
+        log::warning(log_cat, "Ed seed hex: {}\n", oxenc::to_hex(ed_seed));
+        log::warning(log_cat, "\nEd seed PEM:\n{}\n", seed_pem);
+        log::warning(log_cat, "Ed pubkey hex: {}\n", oxenc::to_hex(ed_pubkey));
+        log::warning(log_cat, "\nEd pubkey PEM:\n{}\n", pubkey_pem);
+
+        // uint32_t cast to appease narrowing conversion gods
+        const gnutls_datum_t seed_datum{(uint8_t*)seed_pem.c_str(), (uint32_t)seed_pem.size()};
+        const gnutls_datum_t pubkey_datum{(uint8_t*)pubkey_pem.c_str(), (uint32_t)pubkey_pem.size()};
+
+        if (auto rv = gnutls_certificate_allocate_credentials(&cred); rv < 0)
+        {
+            log::warning(log_cat, "gnutls_certificate_allocate_credentials failed: {}", gnutls_strerror(rv));
+            throw std::runtime_error("gnutls credential allocation failed");
+        }
+
+        //FIXME: the key usage parameter (6th) is weird.  Since we only have the one keypair and
+        //       we're only using it for ECDH, setting it to "use key for anything" should be fine.
+        //       I believe the value for this is 0, and if it works it works.
+        if (auto rv = gnutls_certificate_set_rawpk_key_mem(cred, &pubkey_datum, &seed_datum, GNUTLS_X509_FMT_PEM, nullptr, 0, nullptr, 0, 0); rv < 0)
+        {
+            log::warning(log_cat, "gnutls import of raw Ed keys failed: {}", gnutls_strerror(rv));
+            throw std::runtime_error("gnutls import of raw Ed keys failed");
+        }
+    }
+
     GNUTLSCreds::~GNUTLSCreds()
     {
         log::info(log_cat, "Entered {}", __PRETTY_FUNCTION__);
@@ -89,6 +138,13 @@ namespace oxen::quic
     {
         // would use make_shared, but I want GNUTLSCreds' constructor to be private
         std::shared_ptr<GNUTLSCreds> p{new GNUTLSCreds(remote_key, remote_cert, local_cert, ca)};
+        return p;
+    }
+
+    std::shared_ptr<GNUTLSCreds> GNUTLSCreds::make_from_ed_keys(std::string seed, std::string pubkey)
+    {
+        // would use make_shared, but I want GNUTLSCreds' constructor to be private
+        std::shared_ptr<GNUTLSCreds> p{new GNUTLSCreds(seed, pubkey)};
         return p;
     }
 
@@ -133,6 +189,7 @@ namespace oxen::quic
 
         log::trace(log_cat, "Creating {} GNUTLSSession", (is_client) ? "client" : "server");
 
+        //TODO: needs GNUTLS_ENABLE_RAWPK flag if creds created with raw keys
         if (auto rv = gnutls_init(&session, is_client ? GNUTLS_CLIENT : GNUTLS_SERVER); rv < 0)
         {
             auto s = (is_client) ? "Client"s : "Server"s;

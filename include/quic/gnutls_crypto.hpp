@@ -69,7 +69,10 @@ namespace oxen::quic
             else
             {
                 path = NULL;
-                mem = {(uint8_t*)input.data(), (uint8_t)input.size()};
+
+                // uint32_t cast to appease narrowing conversion gods,
+                // if cert size won't fit in 32 bits we have bigger problems
+                mem = {(uint8_t*)input.c_str(), (uint32_t)input.size()}; 
                 format = !("-----"s.compare(input.substr(0, 5))) ? GNUTLS_X509_FMT_PEM : GNUTLS_X509_FMT_DER;
                 from_mem = true;
             }
@@ -101,6 +104,9 @@ namespace oxen::quic
       private:
         GNUTLSCreds(std::string local_key, std::string local_cert, std::string remote_cert, std::string ca_arg);
 
+        // Construct from raw Ed25519 keys
+        GNUTLSCreds(std::string ed_seed, std::string ed_pubkey);
+
       public:
         ~GNUTLSCreds();
 
@@ -116,6 +122,8 @@ namespace oxen::quic
 
         static std::shared_ptr<GNUTLSCreds> make(
                 std::string remote_key, std::string remote_cert, std::string local_cert = "", std::string ca_arg = "");
+
+        static std::shared_ptr<GNUTLSCreds> make_from_ed_keys(std::string seed, std::string pubkey);
 
         std::unique_ptr<TLSSession> make_session(bool is_client = false) override;
     };
