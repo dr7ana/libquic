@@ -125,7 +125,7 @@ namespace oxen::quic
 
         F func()
         {
-            return [this](auto&&...){ prom.set_value(true); };
+            return [this](auto&&...) { prom.set_value(true); };
         }
 
         bool wait_ready(std::chrono::milliseconds timeout = 1s)
@@ -133,15 +133,9 @@ namespace oxen::quic
             return fut.wait_for(timeout) == std::future_status::ready;
         }
 
-        bool is_ready()
-        {
-            return fut.wait_for(0s) == std::future_status::ready;
-        }
+        bool is_ready() { return fut.wait_for(0s) == std::future_status::ready; }
 
-        bool get()
-        {
-            return fut.get();
-        }
+        bool get() { return fut.get(); }
     };
 
 }  // namespace oxen::quic

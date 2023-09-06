@@ -148,13 +148,9 @@ namespace oxen::quic::test
             std::promise<bool> conn_closed;
             auto f = conn_closed.get_future();
 
-            connection_closed_callback closed_cb = [&conn_closed](auto&&...){
-                conn_closed.set_value(true);
-            };
+            connection_closed_callback closed_cb = [&conn_closed](auto&&...) { conn_closed.set_value(true); };
 
-            connection_established_callback established_cb = [&success](auto&&...){
-                success = true;
-            };
+            connection_established_callback established_cb = [&success](auto&&...) { success = true; };
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);

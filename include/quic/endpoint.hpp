@@ -38,7 +38,7 @@ namespace oxen::quic
     {
         using std::function<void(connection_interface& conn)>::function;
     };
-    struct connection_closed_callback : public std::function<void(connection_interface& conn)> // do we care about reason?
+    struct connection_closed_callback : public std::function<void(connection_interface& conn)>  // do we care about reason?
     {
         using std::function<void(connection_interface& conn)>::function;
     };

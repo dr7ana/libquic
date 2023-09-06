@@ -145,7 +145,7 @@ namespace oxen::quic
         return 0;
     }
 
-    int on_handshake_completed([[maybe_unused]] ngtcp2_conn *conn, void *user_data)
+    int on_handshake_completed([[maybe_unused]] ngtcp2_conn* conn, void* user_data)
     {
         auto* conn_ptr = static_cast<Connection*>(user_data);
         auto dir_str = conn_ptr->is_inbound() ? "server"s : "client"s;
@@ -159,7 +159,7 @@ namespace oxen::quic
         return 0;
     }
 
-    int on_handshake_confirmed([[maybe_unused]] ngtcp2_conn *conn, void *user_data)
+    int on_handshake_confirmed([[maybe_unused]] ngtcp2_conn* conn, void* user_data)
     {
         auto* conn_ptr = static_cast<Connection*>(user_data);
         auto dir_str = conn_ptr->is_inbound() ? "server"s : "client"s;
@@ -426,7 +426,8 @@ namespace oxen::quic
         return context->stream_data_cb;
     }
 
-    bool Connection::close_cb_called() {
+    bool Connection::close_cb_called()
+    {
         bool b = close_cb_was_called;
         close_cb_was_called = true;
         return b;
