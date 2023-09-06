@@ -6,10 +6,10 @@ extern "C"
 #include <gnutls/gnutls.h>
 }
 
-#include <stdexcept>
-
-#include <oxenc/hex.h>
 #include <oxenc/base64.h>
+#include <oxenc/hex.h>
+
+#include <stdexcept>
 
 #include "connection.hpp"
 #include "context.hpp"
@@ -20,17 +20,18 @@ namespace oxen::quic
     const auto client_alpn = "lokinet_client"s;
     const auto relay_alpn = "lokinet_relay"s;
 
-    const gnutls_datum_t alpns[] = {{.data = (uint8_t*)client_alpn.c_str(), .size = 14}, {.data = (uint8_t*)relay_alpn.c_str(), .size = 13}};
+    const gnutls_datum_t alpns[] = {
+            {.data = (uint8_t*)client_alpn.c_str(), .size = 14}, {.data = (uint8_t*)relay_alpn.c_str(), .size = 13}};
 
     GNUTLSSession* get_session_from_gnutls(gnutls_session_t g_session)
     {
-            auto* conn_ref = static_cast<ngtcp2_crypto_conn_ref*>(gnutls_session_get_ptr(g_session));
-            assert(conn_ref);
-            auto* conn = static_cast<Connection*>(conn_ref->user_data);
-            assert(conn);
-            GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
-            assert(tls_session);
-            return tls_session;
+        auto* conn_ref = static_cast<ngtcp2_crypto_conn_ref*>(gnutls_session_get_ptr(g_session));
+        assert(conn_ref);
+        auto* conn = static_cast<Connection*>(conn_ref->user_data);
+        assert(conn);
+        GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
+        assert(tls_session);
+        return tls_session;
     }
 
     extern "C"
@@ -84,7 +85,7 @@ namespace oxen::quic
     GNUTLSCreds::GNUTLSCreds(std::string local_key, std::string local_cert, std::string remote_cert, std::string ca_arg)
     {
         // uncomment for gnutls debug output (see above)
-        //init_gnutls_debug();
+        // init_gnutls_debug();
 
         if (local_key.empty() || local_cert.empty())
             throw std::runtime_error{
@@ -133,7 +134,7 @@ namespace oxen::quic
     GNUTLSCreds::GNUTLSCreds(std::string ed_seed, std::string ed_pubkey, bool snode) : using_raw_pk{true}, is_snode{snode}
     {
         // uncomment for gnutls debug output (see above)
-        //init_gnutls_debug();
+        // init_gnutls_debug();
 
         log::trace(log_cat, "Initializing GNUTLSCreds from Ed25519 keypair");
 
@@ -153,7 +154,7 @@ namespace oxen::quic
         pubkey_pem += oxenc::to_base64(asn_pubkey_bytes);
         pubkey_pem += "\n-----END PUBLIC KEY-----\n";
 
-        //FIXME TODO XXX: debug printing of keys, delete this
+        // FIXME TODO XXX: debug printing of keys, delete this
         log::warning(log_cat, "Ed seed hex: {}\n", oxenc::to_hex(ed_seed));
         log::warning(log_cat, "\nEd seed PEM:\n{}\n", seed_pem);
         log::warning(log_cat, "Ed pubkey hex: {}\n", oxenc::to_hex(ed_pubkey));
@@ -169,24 +170,23 @@ namespace oxen::quic
             throw std::runtime_error("gnutls credential allocation failed");
         }
 
+        constexpr auto usage_flags = GNUTLS_KEY_DIGITAL_SIGNATURE | GNUTLS_KEY_NON_REPUDIATION |
+                                     GNUTLS_KEY_KEY_ENCIPHERMENT | GNUTLS_KEY_DATA_ENCIPHERMENT | GNUTLS_KEY_KEY_AGREEMENT |
+                                     GNUTLS_KEY_KEY_CERT_SIGN;
 
-        constexpr auto usage_flags = GNUTLS_KEY_DIGITAL_SIGNATURE |
-            GNUTLS_KEY_NON_REPUDIATION |
-            GNUTLS_KEY_KEY_ENCIPHERMENT |
-            GNUTLS_KEY_DATA_ENCIPHERMENT |
-            GNUTLS_KEY_KEY_AGREEMENT |
-            GNUTLS_KEY_KEY_CERT_SIGN;
-
-        //FIXME: the key usage parameter (6th) is weird.  Since we only have the one keypair and
-        //       we're only using it for ECDH, setting it to "use key for anything" should be fine.
-        //       I believe the value for this is 0, and if it works it works.
-        if (auto rv = gnutls_certificate_set_rawpk_key_mem(cred, &pubkey_datum, &seed_datum, GNUTLS_X509_FMT_PEM, nullptr, usage_flags, nullptr, 0, 0); rv < 0)
+        // FIXME: the key usage parameter (6th) is weird.  Since we only have the one keypair and
+        //        we're only using it for ECDH, setting it to "use key for anything" should be fine.
+        //        I believe the value for this is 0, and if it works it works.
+        if (auto rv = gnutls_certificate_set_rawpk_key_mem(
+                    cred, &pubkey_datum, &seed_datum, GNUTLS_X509_FMT_PEM, nullptr, usage_flags, nullptr, 0, 0);
+            rv < 0)
         {
             log::warning(log_cat, "gnutls import of raw Ed keys failed: {}", gnutls_strerror(rv));
             throw std::runtime_error("gnutls import of raw Ed keys failed");
         }
 
-        constexpr auto* priority = "NORMAL:+ECDHE-PSK:+PSK:+ECDHE-ECDSA:+AES-128-CCM-8:+CTYPE-CLI-ALL:+CTYPE-SRV-ALL:+SHA256";
+        constexpr auto* priority = "NORMAL:+ECDHE-PSK:+PSK:+ECDHE-ECDSA:+AES-128-CCM-8:+CTYPE-CLI-ALL:+CTYPE-SRV-ALL:+"
+                                   "SHA256";
         const char* err{nullptr};
         if (auto rv = gnutls_priority_init(&priority_cache, priority, &err); rv < 0)
         {
@@ -257,7 +257,8 @@ namespace oxen::quic
         gnutls_handshake_set_hook_function(session, GNUTLS_HANDSHAKE_FINISHED, GNUTLS_HOOK_POST, gnutls_callback_wrapper);
     }
 
-    GNUTLSSession::GNUTLSSession(GNUTLSCreds& creds, bool is_client, std::optional<gnutls_key> expected_key) : creds{creds}, is_client{is_client}, expected_remote_key{expected_key}
+    GNUTLSSession::GNUTLSSession(GNUTLSCreds& creds, bool is_client, std::optional<gnutls_key> expected_key) :
+            creds{creds}, is_client{is_client}, expected_remote_key{expected_key}
     {
         log::trace(log_cat, "Entered {}", __PRETTY_FUNCTION__);
 
@@ -299,8 +300,9 @@ namespace oxen::quic
             bool both = false;
             if (creds.is_snode)
             {
-                both = is_client ? false : true; // allow both alpns, if snode "relay"
-                if (not both) proto = &alpns[1]; // only send relay alpn, if snode "client"
+                both = is_client ? false : true;  // allow both alpns, if snode "relay"
+                if (not both)
+                    proto = &alpns[1];  // only send relay alpn, if snode "client"
             }
             else if (not is_client)
             {
@@ -390,7 +392,7 @@ namespace oxen::quic
 
         cert_type = gnutls_certificate_type_get2(session, GNUTLS_CTYPE_PEERS);
         uint32_t cert_list_size = 0;
-        const gnutls_datum_t *cert_list = gnutls_certificate_get_peers(session, &cert_list_size);
+        const gnutls_datum_t* cert_list = gnutls_certificate_get_peers(session, &cert_list_size);
         if (cert_list_size == 0)
         {
             log::error(log_cat, "{} called, but peers cert list is empty.", __PRETTY_FUNCTION__);
@@ -412,7 +414,11 @@ namespace oxen::quic
 
         auto* cert_data = cert_list[0].data;
         auto cert_size = cert_list[0].size;
-        log::warning(log_cat, "Validating pubkey \"cert\" of len {}:\n\n{}\n\n", cert_size, oxenc::to_hex(cert_data, cert_data + cert_size));
+        log::warning(
+                log_cat,
+                "Validating pubkey \"cert\" of len {}:\n\n{}\n\n",
+                cert_size,
+                oxenc::to_hex(cert_data, cert_data + cert_size));
 
         // pubkey comes as 12 bytes header + 32 bytes key
         std::copy(cert_data + 12, cert_data + 44, remote_key.data());
@@ -431,12 +437,15 @@ namespace oxen::quic
         else
         {
             std::string_view proto_sv{(const char*)proto.data, proto.size};
-            if (proto_sv == client_alpn) remote_is_relay = false;
-            else if (proto_sv == relay_alpn) remote_is_relay = true;
+            if (proto_sv == client_alpn)
+                remote_is_relay = false;
+            else if (proto_sv == relay_alpn)
+                remote_is_relay = true;
             else
             {
                 log::error(log_cat, "Remote ALPN is invalid, how did we get here??", __PRETTY_FUNCTION__);
-                throw std::logic_error{"GNUTLSSession::validate_remote_key session validating keys but ALPN negotiation broke."};
+                throw std::logic_error{
+                        "GNUTLSSession::validate_remote_key session validating keys but ALPN negotiation broke."};
             }
         }
 
