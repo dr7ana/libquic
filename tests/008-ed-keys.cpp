@@ -36,7 +36,7 @@ namespace oxen::quic::test
         };
     };
 
-    TEST_CASE("008 - Ed Keys: Connections", "[001][keys][tls][connection]")
+    TEST_CASE("008 - Ed Keys: Handshakes", "[001][keys][tls][handshake]")
     {
 
         auto client_seed = oxenc::from_hex("468e7ed2cd914ca44568e7189245c7b8e5488404fc88a4019c73b51d9dbc48a5");
