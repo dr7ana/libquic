@@ -66,33 +66,22 @@ namespace oxen::quic::test
     {
         Network test_net{};
 
-        std::promise<bool> tls;
-        std::future<bool> tls_future = tls.get_future();
-
-        gnutls_callback outbound_tls_cb =
-                [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                    log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                    tls.set_value(true);
-                    return 0;
-                };
-
         opt::local_addr server_local{};
         opt::local_addr client_local{};
 
         auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
         auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-        client_tls->set_client_tls_policy(outbound_tls_cb);
 
         auto server_endpoint = test_net.endpoint(server_local);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
         opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-        auto client_endpoint = test_net.endpoint(client_local);
+        bool_waiter<connection_established_callback> client_established;
+        auto client_endpoint = test_net.endpoint(client_local, client_established.func());
         auto conn_interface = client_endpoint->connect(client_remote, client_tls);
 
-        REQUIRE(tls_future.get());
+        REQUIRE(client_established.wait_ready());
         REQUIRE_FALSE(conn_interface->datagrams_enabled());
         REQUIRE_FALSE(conn_interface->packet_splitting_enabled());
         REQUIRE_FALSE(conn_interface->packet_splitting_enabled());
@@ -103,17 +92,6 @@ namespace oxen::quic::test
     {
         Network test_net{};
 
-        std::promise<bool> tls;
-        std::future<bool> tls_future = tls.get_future();
-
-        gnutls_callback outbound_tls_cb =
-                [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                    log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                    tls.set_value(true);
-                    return 0;
-                };
-
         opt::enable_datagrams default_gram{};
 
         opt::local_addr server_local{};
@@ -121,17 +99,17 @@ namespace oxen::quic::test
 
         auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
         auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-        client_tls->set_client_tls_policy(outbound_tls_cb);
 
         auto server_endpoint = test_net.endpoint(server_local, default_gram);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
         opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-        auto client_endpoint = test_net.endpoint(client_local, default_gram);
+        bool_waiter<connection_established_callback> client_established;
+        auto client_endpoint = test_net.endpoint(client_local, default_gram, client_established.func());
         auto conn_interface = client_endpoint->connect(client_remote, client_tls);
 
-        REQUIRE(tls_future.get());
+        REQUIRE(client_established.wait_ready());
         REQUIRE(conn_interface->datagrams_enabled());
         REQUIRE_FALSE(conn_interface->packet_splitting_enabled());
         REQUIRE_FALSE(conn_interface->packet_splitting_enabled());
@@ -144,34 +122,23 @@ namespace oxen::quic::test
     {
         Network test_net{};
 
-        std::promise<bool> tls;
-        std::future<bool> tls_future = tls.get_future();
-
-        gnutls_callback outbound_tls_cb =
-                [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                    log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                    tls.set_value(true);
-                    return 0;
-                };
-
         opt::enable_datagrams split_dgram{Splitting::ACTIVE};
         opt::local_addr server_local{};
         opt::local_addr client_local{};
 
         auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
         auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-        client_tls->set_client_tls_policy(outbound_tls_cb);
 
         auto server_endpoint = test_net.endpoint(server_local, split_dgram);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
         opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-        auto client_endpoint = test_net.endpoint(client_local, split_dgram);
+        bool_waiter<connection_established_callback> client_established;
+        auto client_endpoint = test_net.endpoint(client_local, split_dgram, client_established.func());
         auto conn_interface = client_endpoint->connect(client_remote, client_tls);
 
-        REQUIRE(tls_future.get());
+        REQUIRE(client_established.wait_ready());
         REQUIRE(conn_interface->datagrams_enabled());
         REQUIRE(conn_interface->packet_splitting_enabled());
 
@@ -186,16 +153,8 @@ namespace oxen::quic::test
             Network test_net{};
             auto msg = "hello from the other siiiii-iiiiide"_bsv;
 
-            std::promise<bool> tls_promise, data_promise;
-            std::future<bool> tls_future = tls_promise.get_future(), data_future = data_promise.get_future();
-
-            gnutls_callback outbound_tls_cb =
-                    [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                        log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                        tls_promise.set_value(true);
-                        return 0;
-                    };
+            std::promise<bool> data_promise;
+            std::future<bool> data_future = data_promise.get_future();
 
             dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
                 log::debug(log_cat, "Calling endpoint receive datagram callback... data received...");
@@ -210,18 +169,17 @@ namespace oxen::quic::test
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-            client_tls->set_client_tls_policy(outbound_tls_cb);
 
             auto server_endpoint = test_net.endpoint(server_local, default_gram, recv_dgram_cb);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, default_gram);
+            bool_waiter<connection_established_callback> client_established;
+            auto client = test_net.endpoint(client_local, default_gram, client_established.func());
             auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(tls_future.get());
-
+            REQUIRE(client_established.wait_ready());
             REQUIRE(server_endpoint->datagrams_enabled());
             REQUIRE(client->datagrams_enabled());
 
@@ -245,16 +203,8 @@ namespace oxen::quic::test
 
             std::atomic<int> data_counter{0};
 
-            std::promise<bool> tls_promise, data_promise;
-            std::future<bool> tls_future = tls_promise.get_future(), data_future = data_promise.get_future();
-
-            gnutls_callback outbound_tls_cb =
-                    [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                        log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                        tls_promise.set_value(true);
-                        return 0;
-                    };
+            std::promise<bool> data_promise;
+            std::future<bool> data_future = data_promise.get_future();
 
             dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
                 log::debug(log_cat, "Calling endpoint receive datagram callback... data received...");
@@ -269,18 +219,17 @@ namespace oxen::quic::test
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-            client_tls->set_client_tls_policy(outbound_tls_cb);
 
             auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram);
+            bool_waiter<connection_established_callback> client_established;
+            auto client = test_net.endpoint(client_local, split_dgram, client_established.func());
             auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(tls_future.get());
-
+            REQUIRE(client_established.wait_ready());
             REQUIRE(server_endpoint->datagrams_enabled());
             REQUIRE(client->datagrams_enabled());
 
@@ -328,17 +277,6 @@ namespace oxen::quic::test
             for (int i = 0; i < n; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            std::promise<bool> tls_promise;
-            std::future<bool> tls_future = tls_promise.get_future();
-
-            gnutls_callback outbound_tls_cb =
-                    [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                        log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                        tls_promise.set_value(true);
-                        return 0;
-                    };
-
             dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
                 log::debug(log_cat, "Calling endpoint receive datagram callback... data received...");
 
@@ -361,17 +299,17 @@ namespace oxen::quic::test
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-            client_tls->set_client_tls_policy(outbound_tls_cb);
 
             auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram);
+            bool_waiter<connection_established_callback> client_established;
+            auto client = test_net.endpoint(client_local, split_dgram, client_established.func());
             auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(tls_future.get());
+            REQUIRE(client_established.wait_ready());
 
             REQUIRE(server_endpoint->datagrams_enabled());
             REQUIRE(client->datagrams_enabled());
@@ -423,17 +361,6 @@ namespace oxen::quic::test
             for (size_t i = 0; i < n; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            std::promise<bool> tls_promise;
-            std::future<bool> tls_future = tls_promise.get_future();
-
-            gnutls_callback outbound_tls_cb =
-                    [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                        log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                        tls_promise.set_value(true);
-                        return 0;
-                    };
-
             dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
                 log::debug(log_cat, "Calling endpoint receive datagram callback... data received...");
 
@@ -456,17 +383,17 @@ namespace oxen::quic::test
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-            client_tls->set_client_tls_policy(outbound_tls_cb);
 
             auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram);
+            bool_waiter<connection_established_callback> client_established;
+            auto client = test_net.endpoint(client_local, split_dgram, client_established.func());
             auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(tls_future.get());
+            REQUIRE(client_established.wait_ready());
 
             REQUIRE(server_endpoint->datagrams_enabled());
             REQUIRE(client->datagrams_enabled());
@@ -522,18 +449,7 @@ namespace oxen::quic::test
             for (int i = 0; i < bufsize; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            std::promise<bool> tls_promise;
-            std::future<bool> tls_future = tls_promise.get_future();
-
             bstring received{};
-
-            gnutls_callback outbound_tls_cb =
-                    [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                        log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                        tls_promise.set_value(true);
-                        return 0;
-                    };
 
             dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
                 log::debug(log_cat, "Calling endpoint receive datagram callback... data received...");
@@ -559,17 +475,17 @@ namespace oxen::quic::test
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-            client_tls->set_client_tls_policy(outbound_tls_cb);
 
             auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram);
+            bool_waiter<connection_established_callback> client_established;
+            auto client = test_net.endpoint(client_local, split_dgram, client_established.func());
             auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(tls_future.get());
+            REQUIRE(client_established.wait_ready());
 
             auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
 
@@ -628,17 +544,6 @@ namespace oxen::quic::test
             for (size_t i = 0; i < n; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            std::promise<bool> tls_promise;
-            std::future<bool> tls_future = tls_promise.get_future();
-
-            gnutls_callback outbound_tls_cb =
-                    [&](gnutls_session_t, unsigned int, unsigned int, unsigned int, const gnutls_datum_t*) {
-                        log::debug(log_cat, "Calling client TLS callback... handshake completed...");
-
-                        tls_promise.set_value(true);
-                        return 0;
-                    };
-
             dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
                 log::debug(log_cat, "Calling endpoint receive datagram callback... data received...");
 
@@ -662,17 +567,17 @@ namespace oxen::quic::test
 
             auto server_tls = GNUTLSCreds::make("./serverkey.pem"s, "./servercert.pem"s, "./clientcert.pem"s);
             auto client_tls = GNUTLSCreds::make("./clientkey.pem"s, "./clientcert.pem"s, "./servercert.pem"s);
-            client_tls->set_client_tls_policy(outbound_tls_cb);
 
             auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             opt::remote_addr client_remote{"127.0.0.1"s, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram);
+            bool_waiter<connection_established_callback> client_established;
+            auto client = test_net.endpoint(client_local, split_dgram, client_established.func());
             auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(tls_future.get());
+            REQUIRE(client_established.wait_ready());
 
             std::this_thread::sleep_for(5ms);
             auto max_size = conn_interface->get_max_datagram_size();
