@@ -91,18 +91,22 @@ namespace oxen::quic::test
             return false;
         };
 
-        client_tls->set_key_verify_callback(client_key_allowed_cb);
-        server_tls2->set_key_verify_callback([&](auto, auto) {
+        auto always_allow_cb = [&](auto&&...) {
             key_was_allowed.set_value(true);
             return true;
-        });
+        };
+
+        auto always_deny_cb = [&](auto&&...) {
+            key_was_allowed.set_value(false);
+            return false;
+        };
+
+        client_tls->set_key_verify_callback(client_key_allowed_cb);
+        server_tls2->set_key_verify_callback(always_allow_cb);
 
         SECTION("Successful Connection")
         {
-            server_tls->set_key_verify_callback([&](const auto& key, bool is_relay) {
-                key_was_allowed.set_value(true);
-                return true;
-            });
+            server_tls->set_key_verify_callback(always_allow_cb);
 
             REQUIRE_NOTHROW(client_endpoint->connect(client_remote, client_tls));
 
@@ -112,10 +116,7 @@ namespace oxen::quic::test
 
         SECTION("Connection Not Allowed")
         {
-            server_tls->set_key_verify_callback([&](const auto& key, bool is_relay) {
-                key_was_allowed.set_value(false);
-                return false;
-            });
+            server_tls->set_key_verify_callback(always_deny_cb);
 
             REQUIRE_NOTHROW(client_endpoint->connect(client_remote, client_tls));
 

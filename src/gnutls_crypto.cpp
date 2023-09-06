@@ -185,8 +185,9 @@ namespace oxen::quic
             throw std::runtime_error("gnutls import of raw Ed keys failed");
         }
 
-        constexpr auto* priority = "NORMAL:+ECDHE-PSK:+PSK:+ECDHE-ECDSA:+AES-128-CCM-8:+CTYPE-CLI-ALL:+CTYPE-SRV-ALL:+"
-                                   "SHA256";
+        constexpr auto* priority =
+                "NORMAL:+ECDHE-PSK:+PSK:+ECDHE-ECDSA:+AES-128-CCM-8:+CTYPE-CLI-ALL:+CTYPE-SRV-ALL:+"
+                "SHA256";
         const char* err{nullptr};
         if (auto rv = gnutls_priority_init(&priority_cache, priority, &err); rv < 0)
         {
