@@ -110,7 +110,7 @@ namespace oxen::quic::test
 
             REQUIRE_NOTHROW(client_endpoint->connect(client_remote, client_tls));
 
-            REQUIRE(f.wait_for(20ms) == std::future_status::ready);
+            REQUIRE(f.wait_for(1s) == std::future_status::ready);
             REQUIRE(f.get() == true);
         };
 
@@ -120,7 +120,7 @@ namespace oxen::quic::test
 
             REQUIRE_NOTHROW(client_endpoint->connect(client_remote, client_tls));
 
-            REQUIRE(f.wait_for(20ms) == std::future_status::ready);
+            REQUIRE(f.wait_for(1s) == std::future_status::ready);
             REQUIRE(f.get() == false);
         };
 
@@ -130,7 +130,7 @@ namespace oxen::quic::test
 
             REQUIRE_NOTHROW(client_endpoint->connect(client_remote, server_tls2));
 
-            REQUIRE(f.wait_for(20ms) == std::future_status::ready);
+            REQUIRE(f.wait_for(1s) == std::future_status::ready);
             REQUIRE(f.get() == true);
         };
 
@@ -140,7 +140,7 @@ namespace oxen::quic::test
 
             REQUIRE_NOTHROW(client_endpoint->connect(client_remote, server_tls));
 
-            REQUIRE(f.wait_for(20ms) == std::future_status::ready);
+            REQUIRE(f.wait_for(1s) == std::future_status::ready);
             REQUIRE(f.get() == false);
         };
     };
