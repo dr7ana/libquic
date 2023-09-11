@@ -154,11 +154,10 @@ namespace oxen::quic
         pubkey_pem += oxenc::to_base64(asn_pubkey_bytes);
         pubkey_pem += "\n-----END PUBLIC KEY-----\n";
 
-        // FIXME TODO XXX: debug printing of keys, delete this
-        log::warning(log_cat, "Ed seed hex: {}\n", oxenc::to_hex(ed_seed));
-        log::warning(log_cat, "\nEd seed PEM:\n{}\n", seed_pem);
-        log::warning(log_cat, "Ed pubkey hex: {}\n", oxenc::to_hex(ed_pubkey));
-        log::warning(log_cat, "\nEd pubkey PEM:\n{}\n", pubkey_pem);
+        log::debug(log_cat, "Ed seed hex: {}\n", oxenc::to_hex(ed_seed));
+        log::debug(log_cat, "\nEd seed PEM:\n{}\n", seed_pem);
+        log::debug(log_cat, "Ed pubkey hex: {}\n", oxenc::to_hex(ed_pubkey));
+        log::debug(log_cat, "\nEd pubkey PEM:\n{}\n", pubkey_pem);
 
         // uint32_t cast to appease narrowing conversion gods
         const gnutls_datum_t seed_datum{reinterpret_cast<uint8_t*>(seed_pem.data()), static_cast<uint32_t>(seed_pem.size())};
