@@ -3,6 +3,16 @@ local default_deps_old_base = [
   'libsodium-dev',
   'gnutls-bin',
 ];
+
+local static_gnutls_deps = [
+  'libidn2-dev',
+  'libtasn1-dev',
+  'libunistring-dev',
+  'libgmp-dev',
+  'libhogweed6',
+  'nettle-dev',
+];
+
 local default_deps_base = default_deps_old_base + [
   'libcli11-dev',
   'libfmt-dev',
@@ -77,7 +87,7 @@ local generic_build(jobs, build_type, lto, werror, cmake_extra, local_mirror, te
         ]
         + (if tests then [
              'cd build',
-             '../utils/gen-certs.sh',
+             //             '../utils/gen-certs.sh',
              (if gdb then '../utils/ci/drone-gdb.sh ' else '') + './tests/alltests --log-level debug --no-ipv6 --colour-mode ansi',
              'cd ..',
            ] else []);
@@ -162,7 +172,7 @@ local windows_cross_pipeline(name,
         'echo "man-db man-db/auto-update boolean false" | debconf-set-selections',
         apt_get_quiet + ' update',
         apt_get_quiet + ' install -y eatmydata',
-        'eatmydata ' + apt_get_quiet + ' install --no-install-recommends -y build-essential cmake git pkg-config ccache g++-mingw-w64-x86-64-posix',
+        'eatmydata ' + apt_get_quiet + ' install --no-install-recommends -y build-essential cmake git pkg-config ccache g++-mingw-w64-x86-64-posix nettle-dev libidn2-dev libtasn1-dev libunistring-dev libgmp-dev libhogweed6',
         'mkdir build',
         'cd build',
         'cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/cross/mingw-x64.cmake -DBUILD_STATIC_DEPS=ON ' +
@@ -283,40 +293,48 @@ local mac_builder(name,
       ],
     }],
   },
-  // Various debian builds
-  debian_pipeline('Debian sid (amd64)', docker_base + 'debian-sid'),
-  debian_pipeline('Debian sid/Debug (amd64)', docker_base + 'debian-sid', build_type='Debug'),
-  clang(16),
-  full_llvm(16),
-  debian_pipeline('Debian sid -GSO', docker_base + 'debian-sid', cmake_extra='-DLIBQUIC_SEND=sendmmsg'),
-  debian_pipeline('Debian sid -mmsg', docker_base + 'debian-sid', cmake_extra='-DLIBQUIC_SEND=sendmsg -DLIBQUIC_RECVMMSG=OFF'),
-  debian_pipeline('Debian sid -GSO/Debug', docker_base + 'debian-sid', build_type='Debug', cmake_extra='-DLIBQUIC_SEND=sendmmsg'),
-  debian_pipeline('Debian sid -mmsg/Debug', docker_base + 'debian-sid', build_type='Debug', cmake_extra='-DLIBQUIC_SEND=sendmsg -DLIBQUIC_RECVMMSG=OFF'),
-  debian_pipeline('Debian testing (i386)', docker_base + 'debian-testing/i386'),
-  debian_pipeline('Debian 12 (full static)', docker_base + 'debian-bookworm', cmake_extra='-DBUILD_STATIC_DEPS=ON', deps=['g++']),
-  debian_pipeline('Debian 12 (static GNUTLS)', docker_base + 'debian-bookworm', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=['g++']),
-  debian_pipeline('Debian 12 bookworm (i386)', docker_base + 'debian-bookworm/i386'),
-  debian_pipeline('Debian 11 bullseye (amd64)', docker_base + 'debian-bullseye', deps=default_deps_old, extra_setup=local_gnutls() + debian_backports('bullseye', ['cmake'])),
-  debian_pipeline('Debian 10 buster (amd64)', docker_base + 'debian-buster', deps=default_deps_old, extra_setup=kitware_repo('bionic') + local_gnutls()),
-  debian_pipeline('Debian 10 static Debug', docker_base + 'debian-buster', build_type='Debug', cmake_extra='-DBUILD_STATIC_DEPS=ON', deps=['g++'], extra_setup=kitware_repo('bionic')),
-  debian_pipeline('Ubuntu latest (amd64)', docker_base + 'ubuntu-rolling'),
-  debian_pipeline('Ubuntu 22.04 jammy (amd64)', docker_base + 'ubuntu-jammy'),
-  debian_pipeline('Ubuntu 20.04 focal (amd64)', docker_base + 'ubuntu-focal', deps=default_deps_old, extra_setup=kitware_repo('focal') + local_gnutls()),
-  debian_pipeline('Ubuntu 18.04 bionic (amd64)',
-                  docker_base + 'ubuntu-bionic',
-                  deps=['g++-8'] + default_deps_old_base,
-                  extra_setup=kitware_repo('bionic') + local_gnutls(),
-                  cmake_extra='-DCMAKE_C_COMPILER=gcc-8 -DCMAKE_CXX_COMPILER=g++-8'),
 
-  // ARM builds (ARM64 and armhf)
-  debian_pipeline('Debian sid (ARM64)', docker_base + 'debian-sid', arch='arm64', jobs=4),
+  // UNIX release builds
+  //  clang(16),
+  //  full_llvm(16),
+  //  debian_pipeline('Debian sid (ARM64)', docker_base + 'debian-sid', arch='arm64', jobs=4),
+  //  debian_pipeline('Debian sid (amd64)', docker_base + 'debian-sid'),
+  //  debian_pipeline('Debian sid -GSO', docker_base + 'debian-sid', cmake_extra='-DLIBQUIC_SEND=sendmmsg'),
+  //  debian_pipeline('Debian sid -mmsg', docker_base + 'debian-sid', cmake_extra='-DLIBQUIC_SEND=sendmsg -DLIBQUIC_RECVMMSG=OFF'),
+  //  debian_pipeline('Debian stable (armhf)', docker_base + 'debian-stable/arm32v7', arch='arm64', jobs=4),
+  //  debian_pipeline('Debian testing (i386)', docker_base + 'debian-testing/i386'),
+  //  debian_pipeline('Debian 12 bookworm (i386)', docker_base + 'debian-bookworm/i386'),
+  //  debian_pipeline('Debian 11 bullseye (amd64)', docker_base + 'debian-bullseye', deps=default_deps_old, extra_setup=local_gnutls() + debian_backports('bullseye', ['cmake'])),
+  //  debian_pipeline('Debian 10 buster (amd64)', docker_base + 'debian-buster', deps=default_deps_old, extra_setup=kitware_repo('bionic') + local_gnutls()),
+  //  debian_pipeline('Ubuntu latest (amd64)', docker_base + 'ubuntu-rolling'),
+  //  debian_pipeline('Ubuntu 22.04 jammy (amd64)', docker_base + 'ubuntu-jammy'),
+  //  debian_pipeline('Ubuntu 20.04 focal (amd64)', docker_base + 'ubuntu-focal', deps=default_deps_old, extra_setup=kitware_repo('focal') + local_gnutls()),
+
+
+  // UNIX debug builds
+  //  debian_pipeline('Debian sid -GSO/Debug', docker_base + 'debian-sid', build_type='Debug', cmake_extra='-DLIBQUIC_SEND=sendmmsg'),
+  //  debian_pipeline('Debian sid -mmsg/Debug', docker_base + 'debian-sid', build_type='Debug', cmake_extra='-DLIBQUIC_SEND=sendmsg -DLIBQUIC_RECVMMSG=OFF'),
+  //  debian_pipeline('Debian sid/Debug (amd64)', docker_base + 'debian-sid', build_type='Debug'),
   debian_pipeline('Debian stable/Debug (ARM64)', docker_base + 'debian-stable', arch='arm64', jobs=4, build_type='Debug'),
-  debian_pipeline('Debian stable (armhf)', docker_base + 'debian-stable/arm32v7', arch='arm64', jobs=4),
 
-  // Windows builds (x64)
+
+  // Full static builds
+  debian_pipeline('Debian 12 Static/Debug', docker_base + 'debian-bookworm', build_type='Debug', cmake_extra='-DBUILD_STATIC_DEPS=ON', deps=['g++', 'libunistring-dev', 'libtasn1-dev']),
+  debian_pipeline('Debian 10 Static/Debug', docker_base + 'debian-buster', build_type='Debug', cmake_extra='-DBUILD_STATIC_DEPS=ON', deps=['g++'], extra_setup=kitware_repo('bionic')),
+
+
+  // Static GNUTLS builds
+  debian_pipeline('Debian 12 Static/GNUTLS', docker_base + 'debian-bookworm', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'libhogweed6', 'nettle-dev']),
+  debian_pipeline('Debian 11 Static/GNUTLS (amd64)', docker_base + 'debian-bullseye', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps_old + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'libhogweed6', 'nettle-dev'], extra_setup=debian_backports('bullseye', ['cmake'])),
+  debian_pipeline('Debian 10 Static/GNUTLS (amd64)', docker_base + 'debian-buster', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps_old + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'nettle-dev'], extra_setup=kitware_repo('bionic')),
+  debian_pipeline('Ubuntu 22.04 Static/GNUTLS (amd64)', docker_base + 'ubuntu-jammy', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'libhogweed6', 'nettle-dev']),
+  debian_pipeline('Ubuntu 20.04 Static/GNUTLS (amd64)', docker_base + 'ubuntu-focal', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps_old + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'nettle-dev'], extra_setup=kitware_repo('focal')),
+
+
+  // Windows Cross-compile
   windows_cross_pipeline('Windows (amd64)', docker_base + 'debian-win32-cross-wine'),
 
-  // Macos builds:
+  // MacOS Cross-compile
   mac_builder('macOS (Static)',
               cmake_extra='-DBUILD_STATIC_DEPS=ON',
               lto=true),

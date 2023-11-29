@@ -65,8 +65,27 @@ endif()
 
 include(GNUInstallDirs)
 
+include(add_static_target)
+include(build_external)
+include(system_or_submodule)
+
+set(DEPS_DESTDIR ${CMAKE_BINARY_DIR}/static-deps)
+set(DEPS_SOURCEDIR ${CMAKE_BINARY_DIR}/static-deps-sources)
+
+include_directories(BEFORE SYSTEM ${DEPS_DESTDIR}/include)
+
+set(deps_cc "${CMAKE_C_COMPILER}")
+set(deps_cxx "${CMAKE_CXX_COMPILER}")
+if(CMAKE_C_COMPILER_LAUNCHER)
+  set(deps_cc "${CMAKE_C_COMPILER_LAUNCHER} ${deps_cc}")
+endif()
+if(CMAKE_CXX_COMPILER_LAUNCHER)
+  set(deps_cxx "${CMAKE_CXX_COMPILER_LAUNCHER} ${deps_cxx}")
+endif()
+
 if(BUILD_STATIC_DEPS)
-  include(cmake/StaticBuild.cmake)
+    set(FORCE_STATIC_GNUTLS OFF CACHE BOOL "")
+    include(cmake/StaticBuild.cmake)
 endif()
 
 # Interface target for any general includes, flags, etc. that is meant to be inherited publicly.

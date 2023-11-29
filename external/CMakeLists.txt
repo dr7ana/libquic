@@ -6,11 +6,6 @@ function(enable_lto)
   endif()
 endfunction()
 
-include(add_static_target)
-include(build_external)
-include(deps_config)
-include(system_or_submodule)
-
 find_package(Git)
 if(GIT_FOUND)
     message(STATUS "Checking submodules")
@@ -31,10 +26,16 @@ set(ENABLE_STATIC_LIB ON CACHE BOOL "")
 set(ENABLE_SHARED_LIB OFF CACHE BOOL "")
 set(ENABLE_LIB_ONLY OFF CACHE BOOL "")
 
+add_library(gnutls INTERFACE)
+
+if (FORCE_STATIC_GNUTLS)
+    include(gnutls_source)
+endif()
+
 add_subdirectory(ngtcp2 EXCLUDE_FROM_ALL)
 add_library(ngtcp2::ngtcp2 ALIAS ngtcp2_static)  # Base ngtcp2 (no crypto)
 add_library(ngtcp2_crypto INTERFACE)
-if(BUILD_STATIC_DEPS AND TARGET gnutls::gnutls)
+if((BUILD_STATIC_DEPS OR FORCE_STATIC_GNUTLS) AND TARGET gnutls::gnutls)
     target_link_libraries(ngtcp2_crypto_gnutls_static PUBLIC gnutls::gnutls)
 endif()
 target_link_libraries(ngtcp2_crypto 
@@ -65,14 +66,14 @@ endif()
 
 # gnutls
 if(NOT TARGET gnutls::gnutls)
-    add_library(gnutls INTERFACE)
-    if (FORCE_STATIC_GNUTLS)
-        include(gnutls_source)
-    else()
+    # add_library(gnutls INTERFACE)
+    # if (FORCE_STATIC_GNUTLS)
+    #     include(gnutls_source)
+    # else()
         pkg_check_modules(GNUTLS gnutls>=3.7.2 REQUIRED IMPORTED_TARGET)
         target_link_libraries(gnutls INTERFACE PkgConfig::GNUTLS)
         add_library(gnutls::gnutls ALIAS gnutls)
-    endif()
+    # endif()
 endif()
 
 # libevent

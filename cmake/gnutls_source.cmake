@@ -16,19 +16,36 @@ if (FORCE_STATIC_GNUTLS)
 
     pkg_check_modules(LIBIDN2 libidn2 REQUIRED IMPORTED_TARGET)
     pkg_check_modules(LIBTASN1 libtasn1 REQUIRED IMPORTED_TARGET)
-    pkg_check_modules(GMP gmp REQUIRED IMPORTED_TARGET)
+    pkg_check_modules(GMP gmp IMPORTED_TARGET)
+
+    if (NOT PkgConfig::GMP)
+        add_library(gmp INTERFACE)
+        target_link_libraries(gmp INTERFACE -lgmp)
+        add_library(gmp::gmp ALIAS gmp)
+    else()
+        add_library(gmp::gmp ALIAS PkgConfig::GMP)
+    endif()
+
     pkg_check_modules(HOGWEED hogweed REQUIRED IMPORTED_TARGET)
-    pkg_check_modules(NETTLE nettle REQUIRED IMPORTED_TARGET)
+    pkg_check_modules(NETTLE nettle IMPORTED_TARGET)
+
+    if (NOT PkgConfig::NETTLE)
+        add_library(nettle INTERFACE)
+        target_link_libraries(nettle INTERFACE -lnettle)
+        add_library(nettle::nettle ALIAS nettle)
+    else()
+        add_library(nettle::nettle ALIAS PkgConfig::NETTLE)
+    endif()
 
     target_link_libraries(libunistring INTERFACE -lunistring)
     
     set(gnutls_link_extra 
         libunistring 
-        PkgConfig::GMP 
+        gmp::gmp
         PkgConfig::HOGWEED 
         PkgConfig::LIBTASN1
         PkgConfig::LIBIDN2
-        PkgConfig::NETTLE)
+        nettle::nettle)
 else()
     set(gnutls_link_extra hogweed)
 endif()

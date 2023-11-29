@@ -161,7 +161,6 @@ elseif(gmp_build_host STREQUAL "")
     set(gmp_build_host "--build=${CMAKE_LIBRARY_ARCHITECTURE}")
 endif()
 
-
 build_external(libtasn1
     CONFIGURE_EXTRA --disable-doc
     BUILD_BYPRODUCTS ${DEPS_DESTDIR}/lib/libtasn1.a ${DEPS_DESTDIR}/include/libtasn1.h)
@@ -217,3 +216,4 @@ if(WIN32)
 else()
     add_static_target(libevent::threads libevent_external libevent_pthreads.a)
 endif()
+
