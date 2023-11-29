@@ -21,7 +21,6 @@ project(libquic
     DESCRIPTION "Modular QUIC library for stream and connection management"
     LANGUAGES ${LANGS})
 
-
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     set(libquic_IS_TOPLEVEL_PROJECT TRUE)
 else()
@@ -33,7 +32,7 @@ option(BUILD_STATIC_DEPS "Download, build, and statically link against core depe
 option(WARNINGS_AS_ERRORS "treat all warnings as errors. turn off for development, on for release" OFF)
 option(LIBQUIC_WARN_DEPRECATED "warn deprecated" ON)
 option(LIBQUIC_BUILD_TESTS "Build libquic test suite and programs" ${libquic_IS_TOPLEVEL_PROJECT})
-
+option(FORCE_STATIC_GNUTLS "Build GNUTLS as a static library" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +83,7 @@ target_include_directories(libquic_external INTERFACE include)
 target_include_directories(libquic_internal INTERFACE include/quic)
 
 set(warning_flags -Wall -Wextra -Wno-unknown-pragmas -Wno-unused-function -Werror=vla)
+
 if (LIBQUIC_WARN_DEPRECATED)
     list(APPEND warning_flags -Wdeprecated-declarations)
 else()

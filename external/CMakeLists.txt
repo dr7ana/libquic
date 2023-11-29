@@ -6,13 +6,9 @@ function(enable_lto)
   endif()
 endfunction()
 
-set(DEPS_DESTDIR ${CMAKE_BINARY_DIR}/static-deps)
-set(DEPS_SOURCEDIR ${CMAKE_BINARY_DIR}/static-deps-sources)
-
-include_directories(BEFORE SYSTEM ${DEPS_DESTDIR}/include)
-
-include(build_external)
 include(add_static_target)
+include(build_external)
+include(deps_config)
 include(system_or_submodule)
 
 find_package(Git)
@@ -24,7 +20,7 @@ if(GIT_FOUND)
     check_submodule(oxen-encoding)
 endif()
 
-if(NOT BUILD_STATIC_DEPS)
+if(NOT BUILD_STATIC_DEPS OR FORCE_STATIC_GNUTLS)
     find_package(PkgConfig REQUIRED)
 endif()
 
@@ -67,6 +63,18 @@ if (NOT TARGET oxenc)
     system_or_submodule(OXENC oxenc liboxenc>=1.0.9 oxen-encoding)
 endif()
 
+# gnutls
+if(NOT TARGET gnutls::gnutls)
+    add_library(gnutls INTERFACE)
+    if (FORCE_STATIC_GNUTLS)
+        include(gnutls_source)
+    else()
+        pkg_check_modules(GNUTLS gnutls>=3.7.2 REQUIRED IMPORTED_TARGET)
+        target_link_libraries(gnutls INTERFACE PkgConfig::GNUTLS)
+        add_library(gnutls::gnutls ALIAS gnutls)
+    endif()
+endif()
+
 # libevent
 if(NOT TARGET libevent::core)
     add_library(libevent_core INTERFACE)
@@ -80,12 +88,4 @@ if(NOT TARGET libevent::core)
         target_link_libraries(libevent_threads INTERFACE PkgConfig::LIBEVENT_pthreads)
     endif()
     add_library(libevent::threads ALIAS libevent_threads)
-endif()
-
-# gnutls
-if(NOT TARGET gnutls::gnutls)
-    add_library(gnutls INTERFACE)
-    pkg_check_modules(GNUTLS gnutls>=3.7.2 IMPORTED_TARGET)
-    target_link_libraries(gnutls INTERFACE PkgConfig::GNUTLS)
-    add_library(gnutls::gnutls ALIAS gnutls)
 endif()

@@ -5,14 +5,6 @@
 
 set(LOCAL_MIRROR "" CACHE STRING "local mirror path/URL for lib downloads")
 
-set(GNUTLS_VERSION 3.8.1 CACHE STRING "gnutls version")
-string(REGEX REPLACE "^([0-9]+\\.[0-9]+)\\.[0-9]+$" "\\1" gnutls_version_nopatch "${GNUTLS_VERSION}")
-set(GNUTLS_MIRROR ${LOCAL_MIRROR} https://www.gnupg.org/ftp/gcrypt/gnutls/v${gnutls_version_nopatch}
-    CACHE STRING "gnutls mirror(s)")
-set(GNUTLS_SOURCE gnutls-${GNUTLS_VERSION}.tar.xz)
-set(GNUTLS_HASH SHA512=22e78db86b835843df897d14ad633d8a553c0f9b1389daa0c2f864869c6b9ca889028d434f9552237dc4f1b37c978fbe0cce166e3768e5d4e8850ff69a6fc872
-    CACHE STRING "gnutls source hash")
-
 set(LIBUNISTRING_VERSION 1.1 CACHE STRING "libunistring version")
 set(LIBUNISTRING_MIRROR ${LOCAL_MIRROR} https://ftp.gnu.org/gnu/libunistring
     CACHE STRING "libunistring mirror(s)")
@@ -61,47 +53,6 @@ set(LIBEVENT_MIRROR ${LOCAL_MIRROR} https://github.com/libevent/libevent/release
 set(LIBEVENT_SOURCE libevent-${LIBEVENT_VERSION}.tar.gz)
 set(LIBEVENT_HASH SHA512=88d8944cd75cbe78bc4e56a6741ca67c017a3686d5349100f1c74f8a68ac0b6410ce64dff160be4a4ba0696ee29540dfed59aaf3c9a02f0c164b00307fcfe84f
     CACHE STRING "libevent source hash")
-
-
-include(ExternalProject)
-
-set(DEPS_DESTDIR ${CMAKE_BINARY_DIR}/static-deps)
-set(DEPS_SOURCEDIR ${CMAKE_BINARY_DIR}/static-deps-sources)
-
-include_directories(BEFORE SYSTEM ${DEPS_DESTDIR}/include)
-
-file(MAKE_DIRECTORY ${DEPS_DESTDIR}/include)
-
-set(deps_cc "${CMAKE_C_COMPILER}")
-set(deps_cxx "${CMAKE_CXX_COMPILER}")
-if(CMAKE_C_COMPILER_LAUNCHER)
-  set(deps_cc "${CMAKE_C_COMPILER_LAUNCHER} ${deps_cc}")
-endif()
-if(CMAKE_CXX_COMPILER_LAUNCHER)
-  set(deps_cxx "${CMAKE_CXX_COMPILER_LAUNCHER} ${deps_cxx}")
-endif()
-
-
-function(expand_urls output source_file)
-  set(expanded)
-  foreach(mirror ${ARGN})
-    list(APPEND expanded "${mirror}/${source_file}")
-  endforeach()
-  set(${output} "${expanded}" PARENT_SCOPE)
-endfunction()
-
-function(add_static_target target ext_target libname)
-  add_library(${target} STATIC IMPORTED GLOBAL)
-  add_dependencies(${target} ${ext_target})
-  set_target_properties(${target} PROPERTIES
-    IMPORTED_LOCATION ${DEPS_DESTDIR}/lib/${libname}
-  )
-  if(ARGN)
-      target_link_libraries(${target} INTERFACE ${ARGN})
-  endif()
-endfunction()
-
-
 
 set(cross_host "")
 set(cross_rc "")
@@ -169,60 +120,6 @@ if(_winver)
   set(deps_CXXFLAGS "${deps_CXXFLAGS} -D_WIN32_WINNT=${_winver}")
 endif()
 
-
-if("${CMAKE_GENERATOR}" STREQUAL "Unix Makefiles")
-  set(_make $(MAKE))
-else()
-  set(_make make)
-endif()
-
-
-# Builds a target; takes the target name (e.g. "readline") and builds it in an external project with
-# target name suffixed with `_external`.  Its upper-case value is used to get the download details
-# (from the variables set above).  The following options are supported and passed through to
-# ExternalProject_Add if specified.  If omitted, these defaults are used:
-set(build_def_DEPENDS "")
-set(build_def_PATCH_COMMAND "")
-set(build_def_CONFIGURE_COMMAND ./configure ${cross_host} --disable-shared --prefix=${DEPS_DESTDIR} --with-pic
-    "CC=${deps_cc}" "CXX=${deps_cxx}" "CFLAGS=${deps_CFLAGS}" "CXXFLAGS=${deps_CXXFLAGS}" ${cross_rc})
-set(build_def_CONFIGURE_EXTRA "")
-set(build_def_BUILD_COMMAND ${_make})
-set(build_def_INSTALL_COMMAND ${_make} install)
-set(build_def_BUILD_BYPRODUCTS ${DEPS_DESTDIR}/lib/lib___TARGET___.a ${DEPS_DESTDIR}/include/___TARGET___.h)
-
-function(build_external target)
-  set(options DEPENDS PATCH_COMMAND CONFIGURE_COMMAND CONFIGURE_EXTRA BUILD_COMMAND INSTALL_COMMAND BUILD_BYPRODUCTS)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "${options}")
-  foreach(o ${options})
-    if(NOT DEFINED arg_${o})
-      set(arg_${o} ${build_def_${o}})
-    endif()
-  endforeach()
-  string(REPLACE ___TARGET___ ${target} arg_BUILD_BYPRODUCTS "${arg_BUILD_BYPRODUCTS}")
-
-  string(TOUPPER "${target}" prefix)
-  expand_urls(urls ${${prefix}_SOURCE} ${${prefix}_MIRROR})
-  set(extract_ts)
-  if(NOT CMAKE_VERSION VERSION_LESS 3.24)
-      set(extract_ts DOWNLOAD_EXTRACT_TIMESTAMP ON)
-  endif()
-  ExternalProject_Add("${target}_external"
-    DEPENDS ${arg_DEPENDS}
-    BUILD_IN_SOURCE ON
-    PREFIX ${DEPS_SOURCEDIR}
-    URL ${urls}
-    URL_HASH ${${prefix}_HASH}
-    DOWNLOAD_NO_PROGRESS ON
-    PATCH_COMMAND ${arg_PATCH_COMMAND}
-    CONFIGURE_COMMAND ${arg_CONFIGURE_COMMAND} ${arg_CONFIGURE_EXTRA}
-    BUILD_COMMAND ${arg_BUILD_COMMAND}
-    INSTALL_COMMAND ${arg_INSTALL_COMMAND}
-    BUILD_BYPRODUCTS ${arg_BUILD_BYPRODUCTS}
-    ${extract_ts}
-  )
-endfunction()
-
-
 set(apple_cflags_arch)
 set(apple_cxxflags_arch)
 set(apple_ldflags_arch)
@@ -265,7 +162,6 @@ elseif(gmp_build_host STREQUAL "")
 endif()
 
 
-
 build_external(libtasn1
     CONFIGURE_EXTRA --disable-doc
     BUILD_BYPRODUCTS ${DEPS_DESTDIR}/lib/libtasn1.a ${DEPS_DESTDIR}/include/libtasn1.h)
@@ -306,26 +202,7 @@ build_external(nettle
 add_static_target(nettle nettle_external libnettle.a gmp)
 add_static_target(hogweed nettle_external libhogweed.a nettle)
 
-build_external(gnutls
-    CONFIGURE_EXTRA ${cross_host} --disable-shared --prefix=${DEPS_DESTDIR} --with-pic
-        --without-p11-kit --disable-libdane --disable-cxx --without-tpm --without-tpm2 --disable-doc
-        --without-zlib --without-brotli --without-zstd --without-libintl-prefix
-        "PKG_CONFIG_PATH=${DEPS_DESTDIR}/lib/pkgconfig" "PKG_CONFIG=pkg-config"
-        "CPPFLAGS=-I${DEPS_DESTDIR}/include" "LDFLAGS=-L${DEPS_DESTDIR}/lib"
-        "CC=${deps_cc}" "CXX=${deps_cxx}" "CFLAGS=${deps_CFLAGS}" "CXXFLAGS=${deps_CXXFLAGS}" ${cross_rc}
-    DEPENDS nettle_external
-    BUILD_BYPRODUCTS
-    ${DEPS_DESTDIR}/lib/libgnutls.a
-    ${DEPS_DESTDIR}/include/gnutls/gnutls.h
-)
-add_static_target(gnutls::gnutls gnutls_external libgnutls.a hogweed)
-set(GNUTLS_FOUND ON CACHE BOOL "")
-set(GNUTLS_INCLUDE_DIR ${DEPS_DESTDIR}/include CACHE PATH "")
-set(GNUTLS_LIBRARY ${DEPS_DESTDIR}/lib/libgnutls.a CACHE FILEPATH "")
-set(GNUTLS_LIBRARIES ${DEPS_DESTDIR}/lib/libgnutls.a CACHE FILEPATH "")
-if(WIN32)
-    target_link_libraries(gnutls::gnutls INTERFACE ws2_32 ncrypt crypt32 iphlpapi)
-endif()
+include(gnutls_source)
 
 build_external(libevent
     CONFIGURE_EXTRA --disable-openssl
