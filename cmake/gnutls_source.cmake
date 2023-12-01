@@ -7,7 +7,7 @@
 set(gnutls_build_extra "")
 set(gnutls_link_extra "")
 
-if (STATIC_BUILD_DEPS)
+if (BUILD_STATIC_DEPS)
     set(gnutls_build_extra DEPENDS nettle_external)
 endif()
 

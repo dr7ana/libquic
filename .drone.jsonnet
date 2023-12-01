@@ -327,6 +327,7 @@ local mac_builder(name,
   debian_pipeline('Debian 12 Static/GNUTLS', docker_base + 'debian-bookworm', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'libhogweed6', 'nettle-dev']),
   debian_pipeline('Debian 11 Static/GNUTLS (amd64)', docker_base + 'debian-bullseye', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps_old + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'libhogweed6', 'nettle-dev'], extra_setup=debian_backports('bullseye', ['cmake'])),
   debian_pipeline('Debian 10 Static/GNUTLS (amd64)', docker_base + 'debian-buster', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps_old + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'nettle-dev'], extra_setup=kitware_repo('bionic')),
+  
   debian_pipeline('Ubuntu 22.04 Static/GNUTLS (amd64)', docker_base + 'ubuntu-jammy', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'libhogweed6', 'nettle-dev']),
   debian_pipeline('Ubuntu 20.04 Static/GNUTLS (amd64)', docker_base + 'ubuntu-focal', cmake_extra='-DFORCE_STATIC_GNUTLS=ON', deps=default_deps_old + ['libidn2-dev', 'libtasn1-dev', 'libunistring-dev', 'libgmp-dev', 'nettle-dev'], extra_setup=kitware_repo('focal')),
 
