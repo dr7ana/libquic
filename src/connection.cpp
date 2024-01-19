@@ -364,6 +364,7 @@ namespace oxen::quic
             if (auto rv = ngtcp2_conn_tls_early_data_rejected(conn.get()); rv != 0)
             {
                 log::error(log_cat, "ngtcp2_conn_tls_early_data_rejected: {}", ngtcp2_strerror(rv));
+                log::critical(kill_cat, "ngtcp2_conn_tls_early_data_rejected: {}", ngtcp2_strerror(rv));
                 return -1;
             }
         }
@@ -518,8 +519,15 @@ namespace oxen::quic
                 break;
             case NGTCP2_ERR_DRAINING:
                 log::trace(log_cat, "Note: {} is draining; signaling endpoint to drain connection", reference_id());
+                log::critical(
+                        kill_cat,
+                        "Note: connection {} to {} is draining; signaling endpoint to drain connection",
+                        reference_id(),
+                        oxenc::to_hex(remote_key()));
                 _endpoint.call([this]() {
                     log::debug(log_cat, "Endpoint draining connection {}", reference_id());
+                    log::critical(
+                            kill_cat, "Endpoint draining connection {} top {}", reference_id(), oxenc::to_hex(remote_key()));
                     _endpoint.drain_connection(*this);
                 });
                 break;
@@ -528,6 +536,12 @@ namespace oxen::quic
                         log_cat,
                         "Note: {} encountered error {}; signaling endpoint to close connection",
                         reference_id(),
+                        ngtcp2_strerror(rv));
+                log::critical(
+                        kill_cat,
+                        "Note: connection {} to {} encountered error {}; signaling endpoint to close connection",
+                        reference_id(),
+                        oxenc::to_hex(remote_key()),
                         ngtcp2_strerror(rv));
                 log::debug(log_cat, "Endpoint closing {}", reference_id());
                 _endpoint.close_connection(*this, io_error{rv}, "ERR_PROTO"s);
@@ -538,6 +552,12 @@ namespace oxen::quic
                         log_cat,
                         "Note: {} encountered ngtcp2 error {}; signaling endpoint to delete connection",
                         reference_id(),
+                        ngtcp2_strerror(rv));
+                log::critical(
+                        kill_cat,
+                        "Note: connection {} to {} encountered ngtcp2 error {}; signaling endpoint to delete connection",
+                        reference_id(),
+                        oxenc::to_hex(remote_key()),
                         ngtcp2_strerror(rv));
                 _endpoint.call([this]() {
                     log::debug(log_cat, "Endpoint deleting {}", reference_id());
@@ -554,6 +574,16 @@ namespace oxen::quic
                         reference_id(),
                         ngtcp2_conn_get_tls_alert(*this),
                         ngtcp2_strerror(rv));
+                log::critical(
+                        kill_cat,
+                        "Note: {} connection {} to {} encountered ngtcp2 crypto error {} (code: {}); signaling endpoint to "
+                        "delete "
+                        "connection",
+                        direction_str(),
+                        reference_id(),
+                        oxenc::to_hex(remote_key()),
+                        ngtcp2_conn_get_tls_alert(*this),
+                        ngtcp2_strerror(rv));
                 _endpoint.call([this]() {
                     log::debug(log_cat, "Endpoint deleting {}", reference_id());
                     _endpoint.drop_connection(*this);
@@ -564,6 +594,12 @@ namespace oxen::quic
                         log_cat,
                         "Note: {} encountered error {}; signaling endpoint to close connection",
                         reference_id(),
+                        ngtcp2_strerror(rv));
+                log::critical(
+                        kill_cat,
+                        "Note: connection {} to {} encountered error {}; signaling endpoint to close connection",
+                        reference_id(),
+                        oxenc::to_hex(remote_key()),
                         ngtcp2_strerror(rv));
                 log::debug(log_cat, "Endpoint closing {}", reference_id());
                 _endpoint.close_connection(*this, io_error{rv});
@@ -771,6 +807,12 @@ namespace oxen::quic
         else if (rv.failure())
         {
             log::warning(log_cat, "Error while trying to send packet: {}", rv.str_error());
+            log::critical(
+                    kill_cat,
+                    "Connection {} to {}: Error while trying to send packet: {}",
+                    _ref_id,
+                    oxenc::to_hex(remote_key()),
+                    rv.str_error());
             if (pkt_updater)
                 pkt_updater->cancel();
 
@@ -951,6 +993,12 @@ namespace oxen::quic
                 if (ngtcp2_err_is_fatal(nwrite))
                 {
                     log::critical(log_cat, "Fatal ngtcp2 error: could not write frame - \"{}\"", ngtcp2_strerror(nwrite));
+                    log::critical(
+                            kill_cat,
+                            "Fatal ngtcp2 error (Connection {} to {}): could not write frame - \"{}\"",
+                            _ref_id,
+                            oxenc::to_hex(remote_key()),
+                            ngtcp2_strerror(nwrite));
                     _endpoint.close_connection(*this, io_error{(int)nwrite});
                     return;
                 }
@@ -1290,6 +1338,11 @@ namespace oxen::quic
             if (!good)
             {
                 log::debug(log_cat, "Endpoint closing {}", reference_id());
+                log::critical(
+                        kill_cat,
+                        "Endpoint closing connection {} to {}: reason=DATAGRAM_ERROR_EXCEPTION",
+                        reference_id(),
+                        oxenc::to_hex(remote_key()));
                 _endpoint.close_connection(*this, io_error{DATAGRAM_ERROR_EXCEPTION});
                 return NGTCP2_ERR_CALLBACK_FAILURE;
             }
@@ -1587,6 +1640,12 @@ namespace oxen::quic
                     {
                         log::warning(
                                 log_cat, "Error: expiry handler invocation returned error code: {}", ngtcp2_strerror(rv));
+                        log::critical(
+                                kill_cat,
+                                "Error: connection {} to {} expiry handler invocation returned error code: {}",
+                                self.reference_id(),
+                                oxenc::to_hex(self.remote_key()),
+                                ngtcp2_strerror(rv));
                         self.endpoint().close_connection(self, io_error{rv});
                         return;
                     }

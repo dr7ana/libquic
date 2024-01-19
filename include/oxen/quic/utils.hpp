@@ -44,6 +44,9 @@ namespace oxen::quic
 {
     inline auto log_cat = oxen::log::Cat("quic");
 
+    // temp logging category to selectively elevate log statements related to killing connections
+    inline auto kill_cat = oxen::log::Cat("quicverbose");
+
     class connection_interface;
 
     // called when a connection's handshake completes

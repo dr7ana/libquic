@@ -125,6 +125,7 @@ namespace oxen::quic
 
     void Endpoint::close_conns(std::optional<Direction> d)
     {
+        log::critical(kill_cat, "ENDPOINT CLOSING ALL CONNS");
         call([this, d] {
             // We have to do this in two passes rather than just closing as we go because
             // `close_connection` can remove from `conns`, invalidating our implicit iterator.
@@ -149,19 +150,27 @@ namespace oxen::quic
 
         log::debug(
                 log_cat,
-                "Dropping connection ({}), Reason: {}",
+                "Draining connection ({}), Reason: {}",
                 conn.reference_id(),
                 err->reason ? std::string_view{reinterpret_cast<const char*>(err->reason), err->reasonlen} : "None"sv);
 
-        // prioritize connection level callback over endpoint level
+        log::critical(
+                kill_cat,
+                "Draining connection {} to {}, Reason: {}",
+                conn.reference_id(),
+                oxenc::to_hex(conn.remote_key()),
+                err->reason ? std::string_view{reinterpret_cast<const char*>(err->reason), err->reasonlen} : "None"sv);
+
         if (conn.conn_closed_cb)
         {
             log::trace(log_cat, "{} Calling Connection-level close callback", conn.is_inbound() ? "server" : "client");
+            log::critical(kill_cat, "{} Calling Connection-level close callback", conn.is_inbound() ? "server" : "client");
             conn.conn_closed_cb(conn, err->error_code);
         }
         else if (connection_close_cb)
         {
             log::trace(log_cat, "{} Calling Endpoint-level close callback", conn.is_inbound() ? "server" : "client");
+            log::critical(kill_cat, "{} Calling Endpoint-level close callback", conn.is_inbound() ? "server" : "client");
             connection_close_cb(conn, err->error_code);
         }
 
@@ -222,16 +231,23 @@ namespace oxen::quic
                 "Dropping connection ({}), Reason: {}",
                 conn.reference_id(),
                 err->reason ? std::string_view{reinterpret_cast<const char*>(err->reason), err->reasonlen} : "None"sv);
+        log::critical(
+                kill_cat,
+                "Dropping connection {} to {}, Reason: {}",
+                conn.reference_id(),
+                oxenc::to_hex(conn.remote_key()),
+                err->reason ? std::string_view{reinterpret_cast<const char*>(err->reason), err->reasonlen} : "None"sv);
 
-        // prioritize connection level callback over endpoint level
         if (conn.conn_closed_cb)
         {
             log::trace(log_cat, "{} Calling Connection-level close callback", conn.is_inbound() ? "server" : "client");
+            log::critical(kill_cat, "{} Calling Connection-level close callback", conn.is_inbound() ? "server" : "client");
             conn.conn_closed_cb(conn, err->error_code);
         }
         else if (connection_close_cb)
         {
             log::trace(log_cat, "{} Calling Endpoint-level close callback", conn.is_inbound() ? "server" : "client");
+            log::critical(kill_cat, "{} Calling Endpoint-level close callback", conn.is_inbound() ? "server" : "client");
             connection_close_cb(conn, err->error_code);
         }
 
@@ -250,6 +266,7 @@ namespace oxen::quic
     void Endpoint::_close_connection(Connection& conn, io_error ec, std::string msg)
     {
         log::debug(log_cat, "Closing connection ({})", conn.reference_id());
+        log::critical(kill_cat, "Closing connection ({}) to {}", conn.reference_id(), oxenc::to_hex(conn.remote_key()));
 
         assert(in_event_loop());
 
@@ -267,6 +284,11 @@ namespace oxen::quic
                     "Connection ({}) passed idle expiry timer; closing now without close "
                     "packet",
                     conn.reference_id());
+            log::critical(
+                    kill_cat,
+                    "Connection ({}) passed idle expiry timer; closing now without close "
+                    "packet",
+                    conn.reference_id());
             drop_connection(conn);
             return;
         }
@@ -276,19 +298,25 @@ namespace oxen::quic
         //  https://github.com/ngtcp2/ngtcp2/issues/670#issuecomment-1417300346
         if (ec.ngtcp2_code() == NGTCP2_ERR_HANDSHAKE_TIMEOUT)
         {
-            log::info(
-                    log_cat, "Connection ({}) passed idle expiry timer; closing now with close packet", conn.reference_id());
+            log::info(log_cat, "Connection ({}) handshake timed out; closing now with close packet", conn.reference_id());
+            log::critical(
+                    kill_cat,
+                    "Connection ({} to {}) handshake timed out; closing now with close packet",
+                    conn.reference_id(),
+                    oxenc::to_hex(conn.remote_key()));
         }
 
         // prioritize connection level callback over endpoint level
         if (conn.conn_closed_cb)
         {
             log::trace(log_cat, "{} Calling Connection-level close callback", conn.is_inbound() ? "server" : "client");
+            log::critical(kill_cat, "{} Calling Connection-level close callback", conn.is_inbound() ? "server" : "client");
             conn.conn_closed_cb(conn, ec.code());
         }
         else if (connection_close_cb)
         {
             log::trace(log_cat, "{} Calling Endpoint-level close callback", conn.is_inbound() ? "server" : "client");
+            log::critical(kill_cat, "{} Calling Endpoint-level close callback", conn.is_inbound() ? "server" : "client");
             connection_close_cb(conn, ec.code());
         }
 
@@ -316,6 +344,13 @@ namespace oxen::quic
             delete_connection(conn);
             return;
         }
+        else
+            log::critical(
+                    kill_cat,
+                    "Connection {} to {} writing connection close packet",
+                    conn.reference_id(),
+                    oxenc::to_hex(conn.remote_key()));
+
         // ensure we had enough write space
         assert(static_cast<size_t>(written) <= buf.size());
         buf.resize(written);
@@ -325,7 +360,7 @@ namespace oxen::quic
             {
                 log::warning(
                         log_cat,
-                        "Error: failed to send close packet [{}]; removing connection ({})",
+                        "Error: failed to send close packet [{}]; removing connection {}",
                         rv.str_error(),
                         conn.reference_id());
                 delete_connection(conn);
@@ -337,14 +372,21 @@ namespace oxen::quic
     {
         const auto& rid = conn.reference_id();
 
-        log::debug(log_cat, "Deleting associated CIDs for connection ({})", rid);
+        log::debug(log_cat, "Deleting associated CIDs for connection {}", rid);
+        log::critical(kill_cat, "Deleting associated CIDs for connection {} to {}", rid, oxenc::to_hex(conn.remote_key()));
 
         if (conn.is_inbound())
         {
             dissociate_cid(ngtcp2_conn_get_client_initial_dcid(conn), conn);
         }
 
-        log::debug(log_cat, "Deleting {} associated CIDs for connection ({})", conn.associated_cids().size(), rid);
+        log::debug(log_cat, "Deleting {} associated CIDs for connection {}", conn.associated_cids().size(), rid);
+        log::critical(
+                kill_cat,
+                "Deleting {} associated CIDs for connection {} to {}",
+                conn.associated_cids().size(),
+                rid,
+                oxenc::to_hex(conn.remote_key()));
 
         auto& cids = conn.associated_cids();
 
@@ -355,7 +397,7 @@ namespace oxen::quic
         }
 
         conns.erase(rid);
-        log::debug(log_cat, "Deleted connection ({})", rid);
+        log::debug(log_cat, "Deleted connection {}", rid);
     }
 
     int Endpoint::validate_anti_replay(ustring key, ustring data, time_t /* exp */)
@@ -828,6 +870,11 @@ namespace oxen::quic
                 if (auto it_b = conns.find(it_a->second); it_b != conns.end())
                 {
                     log::debug(log_cat, "Deleting draining connection ({})", it_b->first);
+                    log::critical(
+                            kill_cat,
+                            "Deleting draining connection {} to {}",
+                            it_b->first,
+                            oxenc::to_hex(it_b->second->remote_key()));
                     delete_connection(*it_b->second.get());
                 }
 
