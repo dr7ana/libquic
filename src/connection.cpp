@@ -1665,6 +1665,7 @@ namespace oxen::quic
         test_suite.datagram_flip_flip_counter = 0;
 #endif
         log::info(log_cat, "Successfully created new {} connection object", d_str);
+        log::critical(kill_cat, "Successfully created new {} connection object {}", d_str, _ref_id);
     }
 
     std::shared_ptr<Connection> Connection::make_conn(
