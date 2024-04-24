@@ -63,9 +63,8 @@ namespace oxen::quic::test
         tunnel to connect to a remote manual endpoint.
 
         [manual client] <- manual -> [vanilla client] <- quic datagram -> [vanilla server] <- manual -> [manual server]
-
     */
-    TEST_CASE("011 - Manual Transmission: Binary endpoints", "[011][manual][binary]")
+    TEST_CASE("011 - Manual Transmission: Binary endpoints tunneled over datagrams", "[011][manual][binary][datagrams]")
     {
         auto vanilla_client_established = callback_waiter{[](connection_interface&) {}};
         auto manual_client_established = callback_waiter{[](connection_interface&) {}};
@@ -81,14 +80,14 @@ namespace oxen::quic::test
         Address manual_server_addr{}, vanilla_server_addr{};
         Address manual_client_addr{}, vanilla_client_addr{};
 
-        opt::enable_datagrams enable_dgrams{};
+        opt::enable_datagrams enable_dgrams{Splitting::ACTIVE};
 
         dgram_data_callback vanilla_client_recv_dgram_cb = [&](dgram_interface&, bstring data) {
-            manual_client->manually_receive_packet(Packet{Path{manual_client_addr, manual_server_addr}, std::move(data)});
+            manual_client->manually_receive_packet(Packet{Path{}, std::move(data)});
         };
 
         dgram_data_callback vanilla_server_recv_dgram_cb = [&](dgram_interface&, bstring data) {
-            manual_server->manually_receive_packet(Packet{Path{manual_server_addr, manual_client_addr}, std::move(data)});
+            manual_server->manually_receive_packet(Packet{Path{}, std::move(data)});
         };
 
         opt::manual_routing manual_client_sender{
@@ -124,11 +123,167 @@ namespace oxen::quic::test
 
         std::this_thread::sleep_for(25ms);
 
-        RemoteAddress manual_client_remote{defaults::SERVER_PUBKEY, manual_server_addr};
+        RemoteAddress manual_client_remote{defaults::SERVER_PUBKEY};
 
         manual_client_ci = manual_client->connect(manual_client_remote, client_tls);
 
         CHECK(manual_client_established.wait());
         CHECK(manual_server_established.wait());
+    }
+
+    TEST_CASE("011 - Manual Transmission: Binary endpoints tunneled over streams", "[011][manual][binary][streams]")
+    {
+        Network test_net{};
+        auto good_msg = "hello from the other siiiii-iiiiide"_bsv;
+
+        std::promise<bool> d_promise;
+        std::future<bool> d_future = d_promise.get_future();
+
+        std::shared_ptr<Endpoint> manual_client, manual_server;
+
+        std::unordered_map<int64_t, std::shared_ptr<Stream>> vanilla_client_streams, vanilla_server_streams;
+
+        std::shared_ptr<connection_interface> vanilla_client_ci, vanilla_server_ci;
+
+        Address vanilla_server_addr{}, manual_server_addr{}, manual_client_addr{}, vanilla_client_addr{};
+
+        Address manual_server_addr1{"", 1111}, manual_server_addr2{"", 2222}, manual_server_addr3{"", 3333};
+
+        Path path0{manual_client_addr, manual_server_addr}, path1{manual_client_addr, manual_server_addr1},
+                path2{manual_client_addr, manual_server_addr2}, path3{manual_client_addr, manual_server_addr3};
+
+        // Paths stored client -> server
+        std::unordered_map<int64_t, Path> streamid_to_paths;
+        std::unordered_map<Path, int64_t> paths_to_streamid;
+
+        stream_data_callback vanilla_client_stream_data_cb = [&](Stream& s, bstring_view data) {
+            auto id = s.stream_id();
+            log::critical(log_cat, "Vanilla client recv on stream:{}", id);
+            manual_client->manually_receive_packet(Packet{streamid_to_paths.at(id), bstring{data}});
+        };
+
+        stream_data_callback vanilla_server_stream_data_cb = [&](Stream& s, bstring_view data) {
+            auto id = s.stream_id();
+            log::critical(log_cat, "Vanilla server recv on stream:{}", id);
+            manual_server->manually_receive_packet(Packet{streamid_to_paths.at(id), bstring{data}});
+        };
+
+        stream_data_callback manual_server_stream_data_cb = [&](Stream&, bstring_view data) {
+            log::critical(log_cat, "Manual server received: {}", buffer_printer{data});
+            REQUIRE(good_msg == data);
+            d_promise.set_value(true);
+        };
+
+        auto vanilla_client_established = callback_waiter{[&](connection_interface&) {}};
+
+        auto vanilla_server_established = callback_waiter{[&](connection_interface&) {}};
+
+        opt::manual_routing manual_client_sender{[&](const Path& p, bstring_view d) {
+            if (auto it = paths_to_streamid.find(p); it != paths_to_streamid.end())
+            {
+                auto id = it->second;
+                log::critical(log_cat, "Manual client tunneling on stream (id:{}) path:{}", id, p);
+                vanilla_client_ci->get_stream(id)->send(bstring{d});
+            }
+        }};
+
+        opt::manual_routing manual_server_sender{[&](const Path& p, bstring_view d) {
+            if (auto it = paths_to_streamid.find(p); it != paths_to_streamid.end())
+            {
+                auto id = it->second;
+                log::critical(log_cat, "Manual server tunneling on stream (id:{}) path:{}", id, p);
+                vanilla_server_ci->get_stream(id)->send(bstring{d});
+            }
+        }};
+
+        auto manual_client_established0 = callback_waiter{
+                [](connection_interface& ci) { log::critical(log_cat, "manual client established path:{}", ci.path()); }};
+
+        auto manual_client_established1 = callback_waiter{
+                [](connection_interface& ci) { log::critical(log_cat, "manual client established path:{}", ci.path()); }};
+
+        auto manual_client_established2 = callback_waiter{
+                [](connection_interface& ci) { log::critical(log_cat, "manual client established path:{}", ci.path()); }};
+
+        auto manual_server_established = [](connection_interface& ci) {
+            log::critical(log_cat, "manual server established path:{}", ci.path());
+        };
+
+        auto vanilla_client_stream_constructor = [&](Connection& c, Endpoint& e, std::optional<int64_t>) {
+            auto s = e.make_shared<Stream>(c, e);
+            return s;
+        };
+
+        auto vanilla_server_stream_constructor = [&](Connection& c, Endpoint& e, std::optional<int64_t>) {
+            auto s = e.make_shared<Stream>(c, e);
+            return s;
+        };
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto vanilla_server = test_net.endpoint(vanilla_server_addr);
+        auto vanilla_client = test_net.endpoint(vanilla_client_addr);
+        manual_client = test_net.endpoint(manual_client_addr, manual_client_sender);
+        manual_server = test_net.endpoint(manual_server_addr, manual_server_sender);
+
+        REQUIRE_NOTHROW(vanilla_server->listen(
+                server_tls, vanilla_server_established, vanilla_server_stream_constructor, vanilla_server_stream_data_cb));
+        REQUIRE_NOTHROW(manual_server->listen(server_tls, manual_server_established, manual_server_stream_data_cb));
+
+        RemoteAddress vanilla_client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, vanilla_server->local().port()};
+
+        vanilla_client_ci = vanilla_client->connect(
+                vanilla_client_remote,
+                client_tls,
+                vanilla_client_established,
+                vanilla_client_stream_constructor,
+                vanilla_client_stream_data_cb);
+
+        CHECK(vanilla_client_established.wait());
+        CHECK(vanilla_server_established.wait());
+
+        std::this_thread::sleep_for(25ms);
+
+        REQUIRE(manual_server->is_accepting());
+
+        vanilla_server_ci = vanilla_server->get_all_conns(Direction::INBOUND).front();
+
+        RemoteAddress manual_client_remote0{defaults::SERVER_PUBKEY, path0.remote};
+
+        auto vanilla_client_stream0 = vanilla_client_ci->open_stream();
+        streamid_to_paths.emplace(vanilla_client_stream0->stream_id(), path0);
+        paths_to_streamid.emplace(path0, vanilla_client_stream0->stream_id());
+
+        auto manual_ci0 = manual_client->connect(manual_client_remote0, client_tls, manual_client_established0);
+
+        CHECK(manual_client_established0.wait());
+
+        std::this_thread::sleep_for(25ms);
+
+        RemoteAddress manual_client_remote1{defaults::SERVER_PUBKEY, path1.remote};
+
+        auto vanilla_client_stream1 = vanilla_client_ci->open_stream();
+        streamid_to_paths.emplace(vanilla_client_stream1->stream_id(), path1);
+        paths_to_streamid.emplace(path1, vanilla_client_stream1->stream_id());
+
+        auto manual_ci1 = manual_client->connect(manual_client_remote1, client_tls, manual_client_established1);
+
+        CHECK(manual_client_established1.wait());
+
+        std::this_thread::sleep_for(25ms);
+
+        RemoteAddress manual_client_remote2{defaults::SERVER_PUBKEY, path2.remote};
+
+        auto vanilla_client_stream2 = vanilla_client_ci->open_stream();
+        streamid_to_paths.emplace(vanilla_client_stream2->stream_id(), path2);
+        paths_to_streamid.emplace(path2, vanilla_client_stream2->stream_id());
+
+        auto manual_ci2 = manual_client->connect(manual_client_remote2, client_tls, manual_client_established2);
+
+        CHECK(manual_client_established2.wait());
+
+        // auto manual_stream1 = manual_ci1->open_stream();
+        // manual_stream1->send(good_msg);
+        // require_future(d_future);
     }
 }  //  namespace oxen::quic::test
