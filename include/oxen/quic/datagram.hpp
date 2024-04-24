@@ -26,6 +26,8 @@ namespace oxen::quic
 
         std::shared_ptr<connection_interface> get_conn_interface();
 
+        ustring remote_key() const;
+
         template <
                 typename CharType,
                 std::enable_if_t<sizeof(CharType) == 1 && !std::is_same_v<CharType, std::byte>, int> = 0>

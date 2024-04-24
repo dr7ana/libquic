@@ -34,15 +34,18 @@ namespace oxen::quic
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         return false;
     }
+
     bool DatagramIO::sent_fin() const
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         return false;
     }
+
     void DatagramIO::set_fin(bool)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
     }
+
     size_t DatagramIO::unsent_impl() const
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -53,14 +56,17 @@ namespace oxen::quic
             sum += entry.size();
         return sum;
     }
+
     bool DatagramIO::has_unsent_impl() const
     {
         return not is_empty_impl();
     }
+
     void DatagramIO::wrote(size_t)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
     }
+
     std::vector<ngtcp2_vec> DatagramIO::pending()
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -72,6 +78,11 @@ namespace oxen::quic
     std::shared_ptr<connection_interface> dgram_interface::get_conn_interface()
     {
         return ci.shared_from_this();
+    }
+
+    ustring dgram_interface::remote_key() const
+    {
+        return ustring{ci.remote_key()};
     }
 
     void dgram_interface::reply(bstring_view data, std::shared_ptr<void> keep_alive)
