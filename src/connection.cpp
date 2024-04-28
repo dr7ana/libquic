@@ -474,6 +474,13 @@ namespace oxen::quic
         return tls_session.get();
     }
 
+    ustring Connection::initial_client_scid_impl() const
+    {
+        auto ret = _is_outbound ? _source_cid.to_string() : _dest_cid.to_string();
+        auto reusv = to_usv(ret);
+        return ustring{reusv.data(), reusv.find_first_of('\0')};
+    }
+
     void Connection::halt_events()
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -1756,6 +1763,11 @@ namespace oxen::quic
                 stream->check_timeouts();
         for (const auto& s : pending_streams)
             s->check_timeouts();
+    }
+
+    ustring connection_interface::initial_client_scid()
+    {
+        return endpoint().call_get([this]() { return initial_client_scid_impl(); });
     }
 
     size_t connection_interface::num_streams_active()

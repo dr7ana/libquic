@@ -15,7 +15,12 @@ namespace oxen::quic
 
     std::string quic_cid::to_string() const
     {
-        return oxenc::to_hex(data, data + datalen);
+        if (oxenc::is_hex(data, data + datalen))
+        {
+            return oxenc::to_hex(data, data + datalen);
+        }
+        else
+            return {data, data + datalen};
     }
 
     quic_cid quic_cid::random()

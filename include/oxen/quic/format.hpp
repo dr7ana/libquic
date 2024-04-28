@@ -11,6 +11,7 @@
 #include <iostream>
 
 #include "formattable.hpp"
+#include "utils.hpp"
 
 namespace oxen::quic
 {

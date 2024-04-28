@@ -42,6 +42,14 @@ namespace oxen::quic
         log::trace(log_cat, "User passed connection handshake_timeout config value: {}", config.handshake_timeout->count());
     }
 
+    void IOContext::handle_ioctx_opt(opt::outbound_scid scid)
+    {
+        if (dir == Direction::INBOUND)
+            throw std::runtime_error{"Inbound connection contexts cannot store an outbound scid!"};
+
+        config.scid.emplace(scid);
+    }
+
     void IOContext::handle_ioctx_opt(stream_data_callback func)
     {
         log::trace(log_cat, "IO context stored stream close callback");

@@ -9,7 +9,6 @@ extern "C"
 
 #include "formattable.hpp"
 #include "types.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {

@@ -39,7 +39,7 @@ namespace oxen::quic
     {
         static_assert(
                 (0 + ... + std::is_convertible_v<std::remove_cvref_t<Opt>, std::shared_ptr<TLSCreds>>) == 1,
-                "Endpoint listen/connect require exactly one std::shared_ptr<TLSCreds> argument");
+                "Endpoint::{listen,connect}(...) require exactly one std::shared_ptr<TLSCreds> argument");
     }
 
     class Endpoint : public std::enable_shared_from_this<Endpoint>
@@ -108,8 +108,10 @@ namespace oxen::quic
 
                     for (;;)
                     {
+                        auto scid = outbound_ctx->config.scid.value_or(quic_cid::random());
+
                         // emplace random CID into lookup keyed to unique reference ID
-                        if (auto [it_a, res_a] = conn_lookup.emplace(quic_cid::random(), next_rid); res_a)
+                        if (auto [it_a, res_a] = conn_lookup.emplace(scid, next_rid); res_a)
                         {
                             qcid = it_a->first;
 

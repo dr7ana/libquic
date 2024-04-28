@@ -36,6 +36,7 @@ namespace oxen::quic
         virtual std::shared_ptr<Stream> open_stream_impl(
                 std::function<std::shared_ptr<Stream>(Connection& c, Endpoint& e)> make_stream) = 0;
         virtual std::shared_ptr<Stream> get_stream_impl(int64_t id) = 0;
+        virtual ustring initial_client_scid_impl() const = 0;
 
       public:
         virtual ustring_view selected_alpn() const = 0;
@@ -158,6 +159,7 @@ namespace oxen::quic
         virtual bool is_inbound() const = 0;
         virtual bool is_outbound() const = 0;
         virtual std::string direction_str() = 0;
+        ustring initial_client_scid();
 
         // Non-virtual base class wrappers for the virtual methods of the same name with _impl
         // appended (e.g.  path_impl); these versions in the base class wrap the _impl call in a
@@ -364,6 +366,10 @@ namespace oxen::quic
         // might be shared pointers in application space that keep the connection and/or stream
         // alive after it gets dropped from libquic internal structures).
         void drop_streams();
+
+        // Returns the initial scid chosen by the client, which will be the value of whatever was passed in
+        // opt::outbound_scid on the client's initiation of the connection
+        ustring initial_client_scid_impl() const override;
 
       private:
         // private Constructor (publicly construct via `make_conn` instead, so that we can properly

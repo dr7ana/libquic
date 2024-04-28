@@ -795,4 +795,77 @@ namespace oxen::quic::test
         REQUIRE(stream_callback_called);
         CHECK(*stream_callback_called);
     }
+
+    TEST_CASE("001 - Custom Client Initial Scid", "[001][scid]")
+    {
+        Network test_net{};
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        Address server_local{};
+        Address client_local1{};
+        Address client_local2{};
+
+        auto client_established1 = callback_waiter{[](connection_interface&) {}};
+        auto client_established2 = callback_waiter{[](connection_interface&) {}};
+
+        // Length must be less than NGTCP2_MAX_CIDLEN (20B)
+        CHECK_THROWS(opt::outbound_scid{"hello from your neighbor"_usv});
+
+        auto hello_sv = "goodmorning"_usv;
+        // The converting constructor to quic_cid will pad it out to NGTCP2_MAX_CIDLEN
+        opt::outbound_scid scid_str{hello_sv};
+
+        uint16_t int_like{5685};
+
+        opt::outbound_scid scid_int{int_like};
+
+        auto server_endpoint = test_net.endpoint(server_local);
+
+        // Server cannot accept opt::outbound_scid in call to ::listen(...)
+        CHECK_THROWS(server_endpoint->listen(server_tls, scid_str));
+
+        CHECK_NOTHROW(server_endpoint->listen(server_tls));
+
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+
+        auto client_endpoint1 = test_net.endpoint(client_local1, client_established1);
+        auto client_endpoint2 = test_net.endpoint(client_local2, client_established2);
+
+        auto client_ci1 = client_endpoint1->connect(client_remote, client_tls, scid_str);
+        CHECK(client_established1.wait());
+
+        auto client_ci2 = client_endpoint2->connect(client_remote, client_tls, scid_int);
+        CHECK(client_established2.wait());
+
+        auto server_conns = server_endpoint->get_all_conns(Direction::INBOUND);
+        auto server_ci1 = server_conns.front();
+        auto server_ci2 = server_conns.back();
+
+        auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
+
+        auto client_str_scid1 = client_ci1->initial_client_scid();
+        auto server_str_scid1 = server_ci1->initial_client_scid();
+
+        REQUIRE(client_str_scid1 == hello_sv);
+        REQUIRE(server_str_scid1 == hello_sv);
+
+        auto client_str_scid2 = client_ci2->initial_client_scid();
+        auto server_str_scid2 = server_ci2->initial_client_scid();
+
+        uint16_t client_parsed, server_parsed;
+        REQUIRE(std::from_chars(
+                        reinterpret_cast<const char*>(client_str_scid2.data()),
+                        reinterpret_cast<const char*>(client_str_scid2.data()) + client_str_scid2.size(),
+                        client_parsed)
+                        .ec == std::errc());
+        REQUIRE(std::from_chars(
+                        reinterpret_cast<const char*>(server_str_scid2.data()),
+                        reinterpret_cast<const char*>(server_str_scid2.data()) + server_str_scid2.size(),
+                        server_parsed)
+                        .ec == std::errc());
+
+        REQUIRE(client_parsed == int_like);
+        REQUIRE(server_parsed == int_like);
+    }
 }  // namespace oxen::quic::test

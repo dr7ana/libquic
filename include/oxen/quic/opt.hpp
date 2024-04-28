@@ -3,8 +3,8 @@
 #include <stdexcept>
 
 #include "address.hpp"
+#include "connection_ids.hpp"
 #include "crypto.hpp"
-#include "types.hpp"
 
 namespace oxen::quic
 {
@@ -171,5 +171,54 @@ namespace oxen::quic
 
             explicit operator bool() const { return send_hook != nullptr; }
         };
+
+        // Used to allow the client to set its initial SCID. During ConnectionID association, the client's initial SCID will
+        // be the server's initial DCID. This can allow the client to coordinate information to the server prior to any
+        // stream data being sent down. For example, if a client is attempting to tunnel a connection to a remote port
+        // through streams, the server will be able to access this port value on it's created inbound connection in its
+        // connection_established_cb
+        struct outbound_scid
+        {
+          private:
+            size_t len;
+            std::array<uint8_t, NGTCP2_MAX_CIDLEN> scid;
+
+            template <oxenc::basic_char T>
+            constexpr outbound_scid(const T* data, size_t l) : len{l}
+            {
+                if (len > NGTCP2_MAX_CIDLEN)
+                    throw std::runtime_error{"Max SCID length is 20B"};
+
+                std::memcpy(scid.data(), data, len);
+            }
+
+          public:
+            outbound_scid() = default;
+
+            size_t size() { return scid.size(); }
+            const uint8_t* data() { return scid.data(); }
+
+            template <oxenc::string_view_compatible T>
+            constexpr outbound_scid(T view) : outbound_scid{reinterpret_cast<const char*>(view.data()), view.size()}
+            {}
+
+            template <std::integral T>
+            constexpr outbound_scid(T val)
+            {
+                std::array<char, NGTCP2_MAX_CIDLEN> buf;
+
+                if (auto [res, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), val); ec == std::errc())
+                {
+                    len = res - buf.data();
+                    std::memcpy(scid.data(), buf.data(), len);
+                }
+                else
+                    throw std::runtime_error{"outbound_scid input must be string_view-like or int-like!"};
+            }
+
+            // This converting operator passes NGTCP2_MAX_CIDLEN as the length because ngtcp2 expects it
+            explicit operator oxen::quic::quic_cid() const { return oxen::quic::quic_cid{scid.data(), NGTCP2_MAX_CIDLEN}; }
+        };
+
     }  //  namespace opt
 }  // namespace oxen::quic

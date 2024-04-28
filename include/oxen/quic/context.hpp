@@ -29,6 +29,8 @@ namespace oxen::quic
         bool split_packet{false};
         // splitting policy
         Splitting policy{Splitting::NONE};
+        // outbound scid
+        std::optional<quic_cid> scid{std::nullopt};
 
         user_config() = default;
     };
@@ -65,6 +67,7 @@ namespace oxen::quic
         void handle_ioctx_opt(opt::keep_alive ka);
         void handle_ioctx_opt(opt::idle_timeout ito);
         void handle_ioctx_opt(opt::handshake_timeout hto);
+        void handle_ioctx_opt(opt::outbound_scid scid);
         void handle_ioctx_opt(stream_data_callback func);
         void handle_ioctx_opt(stream_open_callback func);
         void handle_ioctx_opt(stream_close_callback func);
