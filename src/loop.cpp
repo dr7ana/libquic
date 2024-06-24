@@ -46,6 +46,153 @@ namespace oxen::quic
                 .tv_usec = static_cast<decltype(timeval::tv_usec)>((t % 1s) / 1us)};
     }
 
+    std::shared_ptr<Trigger> Trigger::make(
+            const std::shared_ptr<Loop>& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n)
+    {
+        return _loop->template make_shared<Trigger>(_loop->loop(), _cooldown, std::move(task), _n);
+    }
+
+    Trigger::Trigger(const loop_ptr& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n) :
+            n{_n}, _cooldown{loop_time_to_timeval(_cooldown)}, f{std::move(task)}
+    {
+        ev.reset(event_new(
+                _loop.get(),
+                -1,
+                0,
+                [](evutil_socket_t, short, void* s) {
+                    try
+                    {
+                        auto* self = reinterpret_cast<Trigger*>(s);
+                        assert(self);
+
+                        if (not self->f)
+                        {
+                            log::critical(log_cat, "EventTrigger does not have a callback to execute!");
+                            return;
+                        }
+
+                        if (self->_is_cooling_down)
+                        {
+                            log::critical(log_cat, "EventTrigger attempting to execute cooling down event!");
+                            return;
+                        }
+
+                        if (not self->_proceed)
+                        {
+                            log::critical(log_cat, "EventTrigger attempting to execute finished event!");
+                            return;
+                        }
+
+                        log::critical(log_cat, "EventTrigger executing callback...");
+                        self->fire();
+                    }
+                    catch (const std::exception& e)
+                    {
+                        log::critical(log_cat, "EventTrigger caught exception: {}", e.what());
+                    }
+                },
+                this));
+
+        auto rv = event_add(ev.get(), &_null_tv);
+        log::critical(log_cat, "EventTrigger started {}successfully!", rv == 0 ? "" : "un");
+    }
+
+    Trigger::~Trigger()
+    {
+        ev.reset();
+        f = nullptr;
+    }
+
+    void Trigger::fire()
+    {
+        if (current < n)
+        {
+            current += 1;
+
+            log::critical(log_cat, "Attempting callback {}/{} times!", current.load(), n);
+            f();
+        }
+
+        if (current == n)
+        {
+            log::critical(log_cat, "Callback attempted {} times! Cooling down...", n);
+            return cooldown();
+        }
+
+        event_del(ev.get());
+        event_add(ev.get(), &_null_tv);
+    }
+
+    void Trigger::halt()
+    {
+        _is_cooling_down = false;
+        _is_iterating = false;
+        _proceed = false;
+
+        auto rv = event_del(ev.get());
+        log::critical(log_cat, "EventTrigger halted {}successfully!", rv == 0 ? "" : "un");
+    }
+
+    void Trigger::resume()
+    {
+        _is_cooling_down = false;
+        _is_iterating = true;
+        _proceed = true;
+        current = 0;
+
+        auto rv = event_add(ev.get(), &_null_tv);
+        log::critical(log_cat, "EventTrigger resumed {}successfully!", rv == 0 ? "" : "un");
+    }
+
+    void Trigger::cooldown()
+    {
+        event_del(ev.get());
+
+        _is_cooling_down = true;
+        _is_iterating = false;
+
+        auto rv = event_base_once(
+                event_get_base(ev.get()),
+                -1,
+                EV_TIMEOUT,
+                [](evutil_socket_t, short, void* s) {
+                    try
+                    {
+                        auto* self = reinterpret_cast<Trigger*>(s);
+                        assert(self);
+
+                        if (not self->f)
+                        {
+                            log::critical(log_cat, "EventTrigger does not have a callback to execute!");
+                            return;
+                        }
+
+                        if (not self->_is_cooling_down)
+                        {
+                            log::critical(log_cat, "EventTrigger attempting to resume when it is NOT cooling down!");
+                            return;
+                        }
+
+                        if (not self->_proceed)
+                        {
+                            log::critical(log_cat, "EventTrigger attempting to resume when it is halted!");
+                            return;
+                        }
+
+                        log::critical(log_cat, "EventTrigger resuming callback iteration...");
+                        self->resume();
+                    }
+                    catch (const std::exception& e)
+                    {
+                        log::critical(log_cat, "EventTrigger caught exception: {}", e.what());
+                    }
+                },
+                this,
+                &_cooldown);
+
+        log::critical(log_cat, "EventTrigger scheduled cooldown resume {}successfully!", rv == 0 ? "" : "un");
+    }
+
     bool Ticker::start()
     {
         if (_is_running)

@@ -80,8 +80,9 @@ namespace oxen::quic
             _loop->call_later(delay, std::forward<Callable>(hook));
         }
 
-      private:
         std::shared_ptr<Loop> _loop;
+
+      private:
         std::atomic<bool> shutdown_immediate{false};
         std::unordered_set<std::shared_ptr<Endpoint>> endpoint_map;
 

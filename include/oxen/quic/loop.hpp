@@ -27,6 +27,63 @@ namespace oxen::quic
 
     class Loop;
 
+    struct Trigger
+    {
+        friend class Loop;
+
+      private:
+        Trigger(const loop_ptr& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n);
+
+      public:
+        static std::shared_ptr<Trigger> make(
+                const std::shared_ptr<Loop>& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n);
+
+        // No move/copy/etc
+        Trigger() = delete;
+        Trigger(const Trigger&) = delete;
+        Trigger(Trigger&&) = delete;
+        Trigger& operator=(const Trigger&) = delete;
+        Trigger& operator=(Trigger&&) = delete;
+
+        ~Trigger();
+
+        // Resumes iterative execution after successfully cooling down or being signalled to stop by the callback
+        void resume();
+
+        // Called by the passed callback to signal that the iterative invocation should STOP
+        void halt();
+
+      private:
+        // Invokes the function `f`, incrementing `::current` up to `n` before cooling down
+        void fire();
+
+        // Awaits further execution for `_cooldown` amount of time
+        void cooldown();
+
+        const int n;
+        std::atomic<int> current{0};
+
+        event_ptr ev;
+        const timeval _cooldown;
+        const timeval _null_tv{};
+        std::function<void()> f;
+
+        std::atomic<bool> _is_cooling_down{false};
+        std::atomic<bool> _is_iterating{false};
+
+        // Internal boolean for the callback to signal execution should be stopped after the current iteration
+        std::atomic<bool> _proceed{true};
+
+      public:
+        // Indicates the EventTrigger is invoking its callback `n` number of times. During one of these iterations,
+        // the callback may signal termination of iteration by setting `::_proceed = false`
+        bool is_iterating() const { return _is_iterating; }
+
+        // Indicates the EventTrigger has just invoked its callback `n` number of times, and is now awaiting its next
+        // attempt at execution (which will be in `::cooldown` amount of time)
+        bool is_cooling_down() const { return _is_cooling_down; }
+    };
+
     struct Ticker
     {
         friend class Loop;
@@ -139,6 +196,13 @@ namespace oxen::quic
         {
             auto* ptr = new T{std::forward<Args>(args)...};
             return std::shared_ptr<T>{ptr, loop_deleter<T>()};
+        }
+
+        template <typename T, typename... Args>
+        std::unique_ptr<T> make_unique(Args&&... args)
+        {
+            auto* ptr = new T{std::forward<Args>(args)...};
+            return std::unique_ptr<T>{ptr, loop_deleter<T>()};
         }
 
         // Similar to the above make_shared, but instead of forwarding arguments for the
