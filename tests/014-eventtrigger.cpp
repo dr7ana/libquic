@@ -34,7 +34,7 @@ namespace oxen::quic::test
 
         std::atomic<int> recv_counter{}, send_counter{};
 
-        std::shared_ptr<Trigger> trigger = nullptr;
+        std::shared_ptr<EventTrigger> trigger = nullptr;
 
         stream_data_callback server_data_cb = [&](Stream&, bstring_view) {
             recv_counter += 1;
@@ -66,23 +66,54 @@ namespace oxen::quic::test
         // client make stream and send; message displayed by server_data_cb
         auto client_stream = conn_interface->open_stream();
 
-        trigger = Trigger::make(
-                test_net._loop,
-                COOLDOWN,
-                [&]() {
-                    if (send_counter < TOTAL_ITERATIONS)
-                    {
-                        send_counter += 1;
-                        client_stream->send(msg);
-                    }
+        SECTION("Auto start")
+        {
+            trigger = EventTrigger::make(
+                    test_net._loop,
+                    COOLDOWN,
+                    [&]() {
+                        if (send_counter < TOTAL_ITERATIONS)
+                        {
+                            send_counter += 1;
+                            client_stream->send(msg);
+                        }
 
-                    if (send_counter == TOTAL_ITERATIONS)
-                    {
-                        log::critical(log_cat, "Halting EventTrigger!");
-                        trigger->halt();
-                    }
-                },
-                COOLDOWN_ITERATIONS);
+                        if (send_counter == TOTAL_ITERATIONS)
+                        {
+                            log::critical(log_cat, "Halting EventTrigger!");
+                            trigger->halt();
+                        }
+                    },
+                    COOLDOWN_ITERATIONS);
+        }
+
+        SECTION("Manual start")
+        {
+            trigger = EventTrigger::make(
+                    test_net._loop,
+                    COOLDOWN,
+                    [&]() {
+                        if (send_counter < TOTAL_ITERATIONS)
+                        {
+                            send_counter += 1;
+                            client_stream->send(msg);
+                        }
+
+                        if (send_counter == TOTAL_ITERATIONS)
+                        {
+                            log::critical(log_cat, "Halting EventTrigger!");
+                            trigger->halt();
+                        }
+                    },
+                    COOLDOWN_ITERATIONS,
+                    false);
+
+            CHECK_FALSE(trigger->is_iterating());
+            CHECK_FALSE(trigger->is_cooling_down());
+
+            CHECK(trigger->begin());
+            CHECK(trigger->is_iterating());
+        }
 
         require_future(fut_a, WAIT_A);
 
