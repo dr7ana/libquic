@@ -46,13 +46,22 @@ namespace oxen::quic
                 .tv_usec = static_cast<decltype(timeval::tv_usec)>((t % 1s) / 1us)};
     }
 
-    std::shared_ptr<Trigger> Trigger::make(
-            const std::shared_ptr<Loop>& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n)
+    std::shared_ptr<EventTrigger> EventTrigger::make(
+            const std::shared_ptr<Loop>& _loop,
+            std::chrono::microseconds _cooldown,
+            std::function<void()> task,
+            int _n,
+            bool start_immediately)
     {
-        return _loop->template make_shared<Trigger>(_loop->loop(), _cooldown, std::move(task), _n);
+        return _loop->template make_shared<EventTrigger>(_loop->loop(), _cooldown, std::move(task), _n, start_immediately);
     }
 
-    Trigger::Trigger(const loop_ptr& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n) :
+    EventTrigger::EventTrigger(
+            const loop_ptr& _loop,
+            std::chrono::microseconds _cooldown,
+            std::function<void()> task,
+            int _n,
+            bool start_immediately) :
             n{_n}, _cooldown{loop_time_to_timeval(_cooldown)}, f{std::move(task)}
     {
         ev.reset(event_new(
@@ -62,7 +71,7 @@ namespace oxen::quic
                 [](evutil_socket_t, short, void* s) {
                     try
                     {
-                        auto* self = reinterpret_cast<Trigger*>(s);
+                        auto* self = reinterpret_cast<EventTrigger*>(s);
                         assert(self);
 
                         if (not self->f)
@@ -93,27 +102,30 @@ namespace oxen::quic
                 },
                 this));
 
-        auto rv = event_add(ev.get(), &_null_tv);
-        log::critical(log_cat, "EventTrigger started {}successfully!", rv == 0 ? "" : "un");
+        if (start_immediately)
+        {
+            auto rv = begin();
+            log::debug(log_cat, "EventTrigger started {}successfully!", rv ? "" : "un");
+        }
     }
 
-    Trigger::~Trigger()
+    EventTrigger::~EventTrigger()
     {
         ev.reset();
         f = nullptr;
     }
 
-    void Trigger::fire()
+    void EventTrigger::fire()
     {
-        if (current < n)
+        if (_current < n)
         {
-            current += 1;
+            _current += 1;
 
-            log::critical(log_cat, "Attempting callback {}/{} times!", current.load(), n);
+            log::critical(log_cat, "Attempting callback {}/{} times!", _current.load(), n);
             f();
         }
 
-        if (current == n)
+        if (_current == n)
         {
             log::critical(log_cat, "Callback attempted {} times! Cooling down...", n);
             return cooldown();
@@ -123,7 +135,7 @@ namespace oxen::quic
         event_add(ev.get(), &_null_tv);
     }
 
-    void Trigger::halt()
+    void EventTrigger::halt()
     {
         _is_cooling_down = false;
         _is_iterating = false;
@@ -133,18 +145,20 @@ namespace oxen::quic
         log::critical(log_cat, "EventTrigger halted {}successfully!", rv == 0 ? "" : "un");
     }
 
-    void Trigger::resume()
+    bool EventTrigger::begin()
     {
         _is_cooling_down = false;
         _is_iterating = true;
         _proceed = true;
-        current = 0;
+        _current = 0;
 
         auto rv = event_add(ev.get(), &_null_tv);
-        log::critical(log_cat, "EventTrigger resumed {}successfully!", rv == 0 ? "" : "un");
+        log::critical(log_cat, "EventTrigger begun {}successfully!", rv == 0 ? "" : "un");
+
+        return rv == 0;
     }
 
-    void Trigger::cooldown()
+    void EventTrigger::cooldown()
     {
         event_del(ev.get());
 
@@ -158,7 +172,7 @@ namespace oxen::quic
                 [](evutil_socket_t, short, void* s) {
                     try
                     {
-                        auto* self = reinterpret_cast<Trigger*>(s);
+                        auto* self = reinterpret_cast<EventTrigger*>(s);
                         assert(self);
 
                         if (not self->f)
@@ -180,7 +194,7 @@ namespace oxen::quic
                         }
 
                         log::critical(log_cat, "EventTrigger resuming callback iteration...");
-                        self->resume();
+                        self->begin();
                     }
                     catch (const std::exception& e)
                     {

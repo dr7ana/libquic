@@ -27,28 +27,37 @@ namespace oxen::quic
 
     class Loop;
 
-    struct Trigger
+    struct EventTrigger
     {
         friend class Loop;
 
       private:
-        Trigger(const loop_ptr& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n);
+        EventTrigger(
+                const loop_ptr& _loop,
+                std::chrono::microseconds _cooldown,
+                std::function<void()> task,
+                int _n,
+                bool start_immediately = true);
 
       public:
-        static std::shared_ptr<Trigger> make(
-                const std::shared_ptr<Loop>& _loop, std::chrono::microseconds _cooldown, std::function<void()> task, int _n);
+        static std::shared_ptr<EventTrigger> make(
+                const std::shared_ptr<Loop>& _loop,
+                std::chrono::microseconds _cooldown,
+                std::function<void()> task,
+                int _n,
+                bool start_immediately = true);
 
         // No move/copy/etc
-        Trigger() = delete;
-        Trigger(const Trigger&) = delete;
-        Trigger(Trigger&&) = delete;
-        Trigger& operator=(const Trigger&) = delete;
-        Trigger& operator=(Trigger&&) = delete;
+        EventTrigger() = delete;
+        EventTrigger(const EventTrigger&) = delete;
+        EventTrigger(EventTrigger&&) = delete;
+        EventTrigger& operator=(const EventTrigger&) = delete;
+        EventTrigger& operator=(EventTrigger&&) = delete;
 
-        ~Trigger();
+        ~EventTrigger();
 
         // Resumes iterative execution after successfully cooling down or being signalled to stop by the callback
-        void resume();
+        bool begin();
 
         // Called by the passed callback to signal that the iterative invocation should STOP
         void halt();
@@ -61,7 +70,7 @@ namespace oxen::quic
         void cooldown();
 
         const int n;
-        std::atomic<int> current{0};
+        std::atomic<int> _current{0};
 
         event_ptr ev;
         const timeval _cooldown;
