@@ -73,6 +73,7 @@ namespace oxen::quic
         std::atomic<int> _current{0};
 
         event_ptr ev;
+        event_ptr cv;
         const timeval _cooldown;
         const timeval _null_tv{};
         std::function<void()> f;
